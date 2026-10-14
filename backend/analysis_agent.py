@@ -1,6 +1,7 @@
 import subprocess
 import shutil
 import time
+import os
 from pathlib import Path
 
 
@@ -1382,9 +1383,12 @@ class AnalysisAgent:
             else "gcc"
         )
 
+        # The worker runs on Linux, while local development may run on
+        # Windows.  Use the actual host platform instead of Path().anchor
+        # (which is empty on both relative and POSIX paths).
         output_file = project_path / (
             "acr_test_build.exe"
-            if Path().anchor == ""
+            if os.name == "nt"
             else "acr_test_build"
         )
 
@@ -1569,7 +1573,39 @@ class AnalysisAgent:
 
         project_path = Path(project_path)
 
+        # A missing PHP executable must be reported as an environment
+        # problem, not as a syntax error for every source file.  This makes a
+        # stale/incomplete worker image immediately actionable (rebuild
+        # Dockerfile.worker) instead of sending misleading compiler context
+        # to KNN and Gemini.
+        if shutil.which("php") is None:
+            return {
+                "status": "FAILURE",
+                "success": False,
+                "error_type": "php_toolchain_missing",
+                "message": (
+                    "PHP CLI is not installed in the worker image. "
+                    "Rebuild Dockerfile.worker and run the pipeline again."
+                ),
+                "stdout": "",
+                "stderr": "php executable was not found on PATH.",
+                "command": "php -l",
+            }
+
         if (project_path / "composer.json").exists():
+            if shutil.which("composer") is None:
+                return {
+                    "status": "FAILURE",
+                    "success": False,
+                    "error_type": "composer_toolchain_missing",
+                    "message": (
+                        "composer.json is present but Composer is not "
+                        "installed in the worker image."
+                    ),
+                    "stdout": "",
+                    "stderr": "composer executable was not found on PATH.",
+                    "command": "composer install",
+                }
             install = self._run_command(
                 [
                     "composer",
@@ -1635,6 +1671,13 @@ class AnalysisAgent:
 
         if failures:
 
+            diagnostics = []
+            for item in failures:
+                diagnostics.append(
+                    f"FILE: {item['file']}\n"
+                    f"{item.get('stderr', '')}".strip()
+                )
+
             return {
                 "status": "FAILURE",
                 "success": False,
@@ -1643,11 +1686,9 @@ class AnalysisAgent:
                     "PHP syntax validation failed."
                 ),
                 "stdout": "",
-                "stderr": "\n".join(
-                    str(item)
-                    for item in failures
-                ),
+                "stderr": "\n\n".join(diagnostics),
                 "command": "php -l",
+                "failures": failures,
             }
 
         return {
