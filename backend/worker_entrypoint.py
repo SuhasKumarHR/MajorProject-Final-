@@ -85,6 +85,11 @@ def main() -> None:
         "",
     ).strip()
 
+    repo_branch = os.getenv(
+        "REPO_BRANCH",
+        "main",
+    ).strip() or "main"
+
     team_name = os.getenv(
         "TEAM_NAME",
         "",
@@ -121,6 +126,11 @@ def main() -> None:
     print(
         f"[CONFIG] Repository : "
         f"{repo_url or 'NOT SET'}"
+    )
+
+    print(
+        f"[CONFIG] Branch     : "
+        f"{repo_branch}"
     )
 
     print(
@@ -205,6 +215,7 @@ def main() -> None:
             team_name=team_name,
             leader_name=leader_name,
             language_hint=language_hint,
+            repo_branch=repo_branch,
         )
 
         prep_result = prep_agent.execute()
