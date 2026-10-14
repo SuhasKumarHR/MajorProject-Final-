@@ -63,6 +63,10 @@ def run_pipeline_in_container(
         "LANGUAGE_HINT": str(language_hint or "auto").strip().lower(),
         "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
         "ACR_HEAL_MODEL": os.getenv("ACR_HEAL_MODEL", "gemini-3.8-flash"),
+        "ACR_HEAL_FALLBACK_MODEL": os.getenv(
+            "ACR_HEAL_FALLBACK_MODEL",
+            os.getenv("ACR_AURA_FALLBACK_MODEL", "gemini-3.7-flash"),
+        ),
         "ACR_CHAT_MODEL": os.getenv("ACR_CHAT_MODEL", "gemini-3.8-flash"),
         "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
         "MAX_RETRIES": str(retry_limit),

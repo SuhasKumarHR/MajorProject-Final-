@@ -118,10 +118,15 @@ dashboard session; enter the HTTPS repository and select one language before
 starting a run. Set `GEMINI_API_KEY` and `GITHUB_TOKEN` only in `backend/.env`.
 Docker Desktop must be running before ACR_AGENT can build or test a repository.
 
+For the multi-language demonstration repository, use this branch in the
+`GITHUB BRANCH` field so the worker runs the consolidated fixtures:
+`acr-agent/five-errors-all-languages`. Leaving the branch as `main` runs the
+repository's default branch instead.
+
 If `backend/.env` does not exist, copy `backend/.env.example` to `backend/.env`
 and fill in only your own keys. AURA and the healing agent use
 `GEMINI_API_KEY`; the configured text models are `gemini-3.8-flash` with
-`gemini-3.7-flash` as the AURA fallback.
+`gemini-3.7-flash` as the healing and AURA fallback.
 
 ### Important operating limits
 
@@ -810,6 +815,7 @@ GOOGLE_CLIENT_ID=your_google_web_client_id
 GOOGLE_CLIENT_SECRET=your_google_web_client_secret
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
 ACR_HEAL_MODEL=gemini-3.8-flash
+ACR_HEAL_FALLBACK_MODEL=gemini-3.7-flash
 ACR_CHAT_MODEL=gemini-3.8-flash
 PIPELINE_TIME_LIMIT_SECONDS=270
 MAX_RETRIES=5

@@ -1092,85 +1092,98 @@ IMPORTANT RULES:
         prompt
     ):
 
+        primary_model = self.model_name.strip()
+        fallback_model = os.getenv(
+            "ACR_HEAL_FALLBACK_MODEL",
+            os.getenv("ACR_AURA_FALLBACK_MODEL", "gemini-3.7-flash"),
+        ).strip()
+        models = [primary_model]
+        if fallback_model and fallback_model not in models:
+            models.append(fallback_model)
+
+        # Keep healing bounded: retry the primary once, then try the fallback
+        # once. A provider capacity error must not make every language fail.
         max_attempts = 3
+        attempt = 0
+        for model_index, model_name in enumerate(models):
+            model_attempts = 2 if model_index == 0 else 1
+            for _ in range(model_attempts):
+                attempt += 1
+                if attempt > max_attempts:
+                    break
 
-        for attempt in range(
-            1,
-            max_attempts + 1
-        ):
-
-            try:
-
-                print(
-                    f"[INFO] Gemini API "
-                    f"attempt {attempt}/"
-                    f"{max_attempts}..."
-                )
-
-                response = (
-                    self.client.models.generate_content(
-                        model=self.model_name,
-                        contents=prompt,
-                        config={
-                            "temperature": 0.1,
-                            "response_mime_type":
-                                "application/json"
-                        }
-                    )
-                )
-
-                text = (
-                    response.text
-                    if response
-                    else ""
-                )
-
-                if not text:
-
-                    raise ValueError(
-                        "Gemini returned "
-                        "an empty response."
-                    )
-
-                parsed = (
-                    self._parse_gemini_json(
-                        text
-                    )
-                )
-
-                if parsed is not None:
+                try:
 
                     print(
-                        "[SUCCESS] Gemini response "
-                        "parsed successfully."
+                        f"[INFO] Gemini API "
+                        f"attempt {attempt}/"
+                        f"{max_attempts} using {model_name}..."
                     )
 
-                    return parsed
-
-                print(
-                    "[WARN] Gemini returned "
-                    "invalid JSON."
-                )
-
-            except Exception as e:
-
-                formatted_error = (
-                    self._format_gemini_error(
-                        e
+                    response = (
+                        self.client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config={
+                                "temperature": 0.1,
+                                "response_mime_type":
+                                    "application/json"
+                            }
+                        )
                     )
-                )
 
-                print(
-                    f"[WARN] Gemini attempt "
-                    f"{attempt} failed: "
-                    f"{formatted_error}"
-                )
+                    text = (
+                        response.text
+                        if response
+                        else ""
+                    )
 
-            if attempt < max_attempts:
+                    if not text:
 
-                time.sleep(
-                    2 * attempt
-                )
+                        raise ValueError(
+                            "Gemini returned "
+                            "an empty response."
+                        )
+
+                    parsed = (
+                        self._parse_gemini_json(
+                            text
+                        )
+                    )
+
+                    if parsed is not None:
+
+                        print(
+                            "[SUCCESS] Gemini response "
+                            "parsed successfully."
+                        )
+
+                        return parsed
+
+                    print(
+                        "[WARN] Gemini returned "
+                        "invalid JSON."
+                    )
+
+                except Exception as e:
+
+                    formatted_error = (
+                        self._format_gemini_error(
+                            e
+                        )
+                    )
+
+                    print(
+                        f"[WARN] Gemini attempt "
+                        f"{attempt} failed: "
+                        f"{formatted_error}"
+                    )
+
+                if attempt < max_attempts:
+
+                    time.sleep(
+                        2 * attempt
+                    )
 
         print(
             "[ERROR] Gemini healing failed "
