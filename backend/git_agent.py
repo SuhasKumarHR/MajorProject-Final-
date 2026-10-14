@@ -1,216 +1,146 @@
+"""Commit verified recovery changes and create a real GitHub pull request."""
+
+from __future__ import annotations
+
 import os
-import time
-import requests
-from git import Repo
-from github import Github  # pip install PyGithub
-import shutil
+import re
+from pathlib import Path
+from urllib.parse import urlparse
+
+from git import GitCommandError, Repo
+from github import Github
+from github.GithubException import GithubException
+
+
 class GitAgent:
-    """
-    Agent 4: Git Automation Agent (Smart Forking & Auto-PR)
-    Responsibility:
-    1. Configure local git identity.
-    2. Commit changes locally.
-    3. Check ownership & Fork if necessary.
-    4. Push changes.
-    5. AUTOMATICALLY create a Pull Request.
-    """
+    """Publish only explicit, verified HealingAgent changes."""
 
     def __init__(self, repo_path, repo_url, branch_name, team_name, leader_name):
-        self.repo_path = repo_path
-        self.original_repo_url = repo_url
-        self.branch_name = branch_name
-        self.team_name = team_name
-        self.leader_name = leader_name
-        self.github_token = os.getenv("GITHUB_TOKEN")
-        self.api_base = "https://api.github.com"
+        self.repo_path = Path(repo_path).resolve()
+        self.repo_url = str(repo_url)
+        self.branch_name = self._sanitize_branch(branch_name)
+        self.team_name = str(team_name)
+        self.leader_name = str(leader_name)
+        self.github_token = os.getenv("GITHUB_TOKEN", "").strip()
 
-    def _get_headers(self):
-        return {
-            "Authorization": f"token {self.github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+    @staticmethod
+    def _sanitize_branch(value):
+        value = re.sub(r"[^A-Za-z0-9._/-]", "_", str(value or ""))
+        value = re.sub(r"_+", "_", value).strip("._-/")
+        return value or "ACR_AGENT_AI_Fix"
 
-    def _get_current_user(self):
-        """Fetches the authenticated user's username."""
-        resp = requests.get(f"{self.api_base}/user", headers=self._get_headers())
-        if resp.status_code == 200:
-            return resp.json()["login"]
-        raise Exception(f"Failed to get user info: {resp.text}")
+    def _repository(self):
+        if not (self.repo_path / ".git").is_dir():
+            raise RuntimeError(f"Git repository not found at: {self.repo_path}")
+        return Repo(self.repo_path)
 
-    def _parse_repo_info(self, url):
-        print("urlll"+url)
-        clean = (
-        url.rstrip("/")
-        .removesuffix(".git")
-        .replace("https://github.com/", "")
-        .replace("http://github.com/", "")
-        )
-        print("clean"+clean)
-        parts = clean.split("/")
-        if len(parts) < 2:
-            raise ValueError(f"Invalid GitHub URL format: {url}")
-        print("parts"+str(parts))
-        return parts[0], parts[1]
+    def _safe_paths(self, fixes):
+        paths = []
+        for fix in fixes or []:
+            if not isinstance(fix, dict):
+                continue
+            raw_path = str(fix.get("file_path", "")).replace("\\", "/").lstrip("./")
+            if not raw_path:
+                continue
+            candidate = (self.repo_path / raw_path).resolve()
+            try:
+                relative_path = candidate.relative_to(self.repo_path).as_posix()
+            except ValueError:
+                continue
+            if candidate.is_file() and relative_path not in paths:
+                paths.append(relative_path)
+        return paths
 
-    def _fork_repository(self, owner, repo_name):
-        print(f"[LOG] Forking {owner}/{repo_name} to your account...")
-        url = f"{self.api_base}/repos/{owner}/{repo_name}/forks"
-        resp = requests.post(url, headers=self._get_headers())
-        if resp.status_code in [200, 202]:
-            return True
-        print(f"[ERROR] Fork failed: {resp.text}")
-        return False
+    def _ensure_branch(self, repo):
+        if self.branch_name in {branch.name for branch in repo.branches}:
+            repo.git.checkout(self.branch_name)
+        else:
+            repo.create_head(self.branch_name).checkout()
 
-    def _wait_for_fork(self, new_owner, repo_name):
-        print("[LOG] Waiting for fork to be ready...")
-        url = f"{self.api_base}/repos/{new_owner}/{repo_name}"
-        for i in range(30): # Wait up to 60s
-            resp = requests.get(url, headers=self._get_headers())
-            if resp.status_code == 200:
-                print("[LOG] Fork is ready!")
-                return True
-            time.sleep(2)
-        return False
-    def _fork_exists(self, current_user: str, repo_name: str) -> bool:
-        """Check if a fork already exists under current_user's account."""
-        url = f"https://api.github.com/repos/{current_user}/{repo_name}"
-        headers = {
-            "Authorization": f"token {self.github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                # Extra check: confirm it's actually a fork (not a repo with the same name)
-                repo_data = response.json()
-                return repo_data.get("fork", False)
-            return False
-        except requests.RequestException as e:
-            print(f"[LOG] Warning: Could not check fork existence: {e}")
-            return False  # Assume it doesn't exist; _wait_for_fork will handle it
+    def _parse_github_repository(self):
+        parsed = urlparse(self.repo_url)
+        if parsed.hostname != "github.com":
+            raise RuntimeError("A GitHub HTTPS repository URL is required to create a pull request.")
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) != 2:
+            raise RuntimeError("Unable to parse the GitHub owner and repository name.")
+        return parts[0], parts[1].removesuffix(".git")
 
-    def create_pull_request(self, fixes, current_user, repo_owner, repo_name):
-        """Creates a PR to the original repository, skips if already exists."""
-        print(f"\n--- 🔀 Creating Pull Request ---")
-        try:
-            g = Github(self.github_token)
-            original_repo = g.get_repo(f"{repo_owner}/{repo_name}")
-            
-            head_branch = self.branch_name
-            if current_user.lower() != repo_owner.lower():
-                head_branch = f"{current_user}:{self.branch_name}"
-
-            print(f"[DEBUG] PR Head: {head_branch} -> Base: {original_repo.default_branch}")
-
-            # Check if PR already exists for this branch
-            existing_prs = original_repo.get_pulls(
-                state="open", head=head_branch, base=original_repo.default_branch
-            )
-            for pr in existing_prs:
-                print(f"[LOG] PR already exists: {pr.html_url}. Skipping creation.")
-                return {"status": "SUCCESS", "pr_url": pr.html_url}
-
-            # Generate PR Body with Table
-            rows = ""
-            for fix in fixes:
-                f_path = fix.get('file_path', 'unknown')
-                b_type = fix.get('bug_type', 'General')
-                rows += f"| `{f_path}` | {b_type} | ✅ Fixed |\n"
-
-            pr_body = f"""## 🤖 AI-Agent Automated Fix PR
-
-    **Team**: {self.team_name}
-    **Leader**: {self.leader_name}
-
-    ### 📋 Fixes Applied
-    | File | Bug Type | Status |
-    |---|---|---|
-    {rows}
-
-    > *Auto-generated by [AI-AGENT] — RIFT 2026*
-    """
-            pr = original_repo.create_pull(
-                title=f"[AI-AGENT] Automated fixes by {self.team_name}",
-                body=pr_body,
-                head=head_branch,
-                base=original_repo.default_branch
-            )
-            print(f"[SUCCESS] Pull Request created: {pr.html_url}")
-            return {"status": "SUCCESS", "pr_url": pr.html_url}
-
-        except Exception as e:
-            print(f"[ERROR] PR Creation failed: {e}")
-            return {"status": "FAILED", "error": str(e)}
-
-
-    def execute(self, fixes):
-        """Executes Commit -> Push -> PR flow."""
-        print(f"--- [AGENT START]: GitAgent ---")
-
+    def _push_branch(self, repo):
         if not self.github_token:
-            return {"status": "FAILED", "error": "GITHUB_TOKEN is missing in .env"}
+            raise RuntimeError("GITHUB_TOKEN is not configured.")
+        origin = repo.remotes.origin
+        remote_url = origin.url
+        if not remote_url.startswith("https://github.com/"):
+            origin.push(refspec=f"{self.branch_name}:{self.branch_name}")
+            return
 
+        authenticated_url = (
+            "https://x-access-token:"
+            f"{self.github_token}@github.com/"
+            f"{remote_url.split('github.com/', 1)[1]}"
+        )
+        temporary_name = "acr_agent_authenticated_push"
+        if temporary_name in {remote.name for remote in repo.remotes}:
+            repo.delete_remote(temporary_name)
+        temporary_remote = repo.create_remote(temporary_name, authenticated_url)
         try:
-            repo = Repo(self.repo_path)
+            temporary_remote.push(refspec=f"{self.branch_name}:{self.branch_name}")
+        finally:
+            repo.delete_remote(temporary_remote)
 
-            # 1. Configure Identity & Disable Prompts
-            with repo.config_writer() as config:
-                config.set_value("user", "name", "RIFT_AGENT")
-                config.set_value("user", "email", "agent@rift-hackathon.com")
-                config.set_value("credential", "helper", "")
+    def _create_pull_request(self):
+        owner, repository_name = self._parse_github_repository()
+        github_repo = Github(self.github_token).get_repo(f"{owner}/{repository_name}")
+        base_branch = github_repo.default_branch
+        existing = github_repo.get_pulls(
+            state="open",
+            head=f"{owner}:{self.branch_name}",
+            base=base_branch,
+        )
+        for pull_request in existing:
+            return pull_request.html_url
+        pull_request = github_repo.create_pull(
+            title="ACR_AGENT: verified CI/CD recovery",
+            body=(
+                "## ACR_AGENT verified recovery\n\n"
+                f"- Team: {self.team_name}\n"
+                f"- Leader: {self.leader_name}\n"
+                f"- Branch: `{self.branch_name}`\n"
+                "- Changes were committed only after a fresh build/test verification."
+            ),
+            head=self.branch_name,
+            base=base_branch,
+        )
+        return pull_request.html_url
 
-            # 2. Branch & Checkout
-            if self.branch_name in repo.heads:
-                current = repo.heads[self.branch_name]
-            else:
-                current = repo.create_head(self.branch_name)
-            current.checkout()
-
-            # 3. Commit
-            repo.git.add('--all')
-            has_staged = repo.is_dirty(index=True)
-            has_untracked = bool(repo.untracked_files)
-            if not has_staged and not has_untracked:
-                print("[LOG] No changes to commit. Proceeding to push & PR in case of prior commits...")
-            else:
-                summary = ", ".join([f.get('bug_type', 'Fix') for f in fixes])
-                full_message = f"[AI-AGENT] Fixed {len(fixes)} issues: {summary}"
-                repo.index.commit(full_message)
-                print(f"[LOG] Committed: {full_message}")
-
-            # 4. Handle Fork & Push
-            original_owner, repo_name = self._parse_repo_info(self.original_repo_url)
-            current_user = self._get_current_user()
-
-            if original_owner.lower() == current_user.lower():
-                print(f"[LOG] Pushing to own repo...")
-                target_remote_url = f"https://{self.github_token}@github.com/{current_user}/{repo_name}.git"
-            else:
-                print(f"[LOG] Repo owned by '{original_owner}'. Checking for existing fork...")
-                if not self._fork_exists(current_user, repo_name):
-                    print(f"[LOG] Fork not found. Creating fork...")
-                    self._fork_repository(original_owner, repo_name)
-                    if not self._wait_for_fork(current_user, repo_name):
-                        return {"status": "FAILED", "error": "Fork creation timed out"}
-                else:
-                    print(f"[LOG] Fork already exists at {current_user}/{repo_name}. Skipping fork creation.")
-                target_remote_url = f"https://{self.github_token}@github.com/{current_user}/{repo_name}.git"
-
-            # Push (force-push to handle re-runs gracefully)
-            print(f"[LOG] Pushing to branch {self.branch_name}...")
-            with repo.git.custom_environment(GIT_TERMINAL_PROMPT='0'):
-                repo.git.push(target_remote_url, f"{self.branch_name}:{self.branch_name}", "--force")
-            # 5. Create Pull Request (idempotent — skips if PR already open)
-            pr_result = self.create_pull_request(fixes, current_user, original_owner, repo_name)
-            shutil.rmtree("temp", ignore_errors=True)
-
+    def execute(self, fixes=None):
+        """Commit, push, and return a real PR URL only after verified changes exist."""
+        if not self.github_token:
+            return {"status": "FAILED", "error": "GITHUB_TOKEN is not configured.", "pr_url": None}
+        try:
+            repo = self._repository()
+            paths = self._safe_paths(fixes)
+            if not paths:
+                return {
+                    "status": "FAILED",
+                    "error": "No verified repository-relative repair files are available to commit.",
+                    "pr_url": None,
+                }
+            self._ensure_branch(repo)
+            if not repo.git.status("--porcelain", "--", *paths).strip():
+                return {"status": "FAILED", "error": "No verified changes were detected.", "pr_url": None}
+            repo.git.add("--", *paths)
+            commit = repo.index.commit(f"fix: ACR_AGENT verified recovery ({len(paths)} file{'s' if len(paths) != 1 else ''})")
+            self._push_branch(repo)
+            pr_url = self._create_pull_request()
             return {
                 "status": "SUCCESS",
                 "branch": self.branch_name,
-                "pushed_to": f"github.com/{current_user}/{repo_name}",
-                "pr_url": pr_result.get("pr_url")
+                "commit": commit.hexsha,
+                "commit_hash": commit.hexsha,
+                "pr_url": pr_url,
+                "fixes_committed": len(paths),
             }
-
-        except Exception as e:
-            print(f"[ERROR] Git operation failed: {e}")
-            return {"status": "FAILED", "error": str(e)}
+        except (GitCommandError, GithubException, OSError, RuntimeError) as exc:
+            return {"status": "FAILED", "error": str(exc), "branch": self.branch_name, "pr_url": None}

@@ -723,3 +723,26 @@
   .auth-footer { align-items: flex-start; gap: 10px; padding: 0 20px 18px; line-height: 1.5; }
   .auth-footer span:last-child { text-align: right; }
 }
+
+/* Restored command-center presentation used by the original dashboard. */
+@keyframes acr-title-drift {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(8px); }
+}
+
+.acr-title-drift { animation: acr-title-drift 7s ease-in-out infinite; }
+
+.acr-welcome-crest {
+  color: transparent;
+  background: linear-gradient(90deg, #67e8f9, #ffffff 48%, #c4b5fd);
+  background-clip: text;
+  -webkit-background-clip: text;
+  text-shadow: 0 0 24px rgba(103, 232, 249, 0.22);
+}
+
+.acr-dashboard .text-xs { font-size: 0.8125rem; }
+.acr-dashboard .text-sm { font-size: 0.9375rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .acr-title-drift, .acr-welcome-crest { animation: none; }
+}

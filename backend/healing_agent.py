@@ -41,7 +41,12 @@ class HealingAgent:
             api_key=self.api_key
         )
 
-        self.model_name = "gemini-3-flash-preview"
+        # Keep the model configurable so an unavailable preview name does not
+        # stop the recovery pipeline. The stable Flash model is the default.
+        self.model_name = os.getenv(
+            "ACR_HEAL_MODEL",
+            "gemini-3.8-flash",
+        )
 
     # =========================================================
     # MAIN EXECUTION
@@ -550,13 +555,31 @@ IMPORTANT RULES:
         standalone_matches = re.findall(
             r'(?<![\w.-])'
             r'([A-Za-z0-9_./\\-]+'
-            r'\.(?:js|jsx|ts|tsx|py|java))'
+            r'\.(?:js|jsx|ts|tsx|py|java|c|h|cpp|cc|cxx|hpp|cs|go|rs|php|kt|kts|json|toml|xml|gradle))'
             r'(?![\w.-])',
-            text
+            text,
+            flags=re.IGNORECASE,
         )
 
         files.extend(
             standalone_matches
+        )
+
+        # Build tools often report a configuration filename without a line
+        # number. It remains only a candidate until filesystem validation
+        # below proves it is an existing file inside the cloned repository.
+        config_matches = re.findall(
+            r'(?<![\w.-])'
+            r'([A-Za-z0-9_./\\-]*(?:package\.json|requirements\.txt|pyproject\.toml|pom\.xml|'
+            r'build\.gradle(?:\.kts)?|CMakeLists\.txt|Makefile|[^/\\]+\.csproj|go\.mod|'
+            r'Cargo\.toml|composer\.json|Dockerfile|tsconfig\.json))'
+            r'(?![\w.-])',
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        files.extend(
+            config_matches
         )
 
         # -----------------------------------------------------

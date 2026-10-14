@@ -1,94 +1,170 @@
 import os
 import shutil
-import subprocess
 import re
+import json
 from pathlib import Path
+from typing import Any
 
 from git import Repo
-from language_detector import detect_project_language
+from language_detector import detect_project_details
 
 
 class RepoPrepAgent:
-    """
-    Agent 1: Repository Preparation Agent
 
-    Responsibilities:
-    1. Clone the repository into a temporary directory.
-    2. Detect the project environment.
-    3. Support Python, JavaScript, TypeScript and Java.
-    4. Install dependencies if configuration files exist.
-    5. Generate the mandatory branch name.
-    """
-
-    def __init__(self, repo_url, team_name, leader_name):
+    def __init__(self, repo_url, team_name, leader_name, language_hint="auto"):
         self.repo_url = repo_url
 
-        # Sanitize names
         self.team_name = self._sanitize_name(team_name)
         self.leader_name = self._sanitize_name(leader_name)
+        self.language_hint = self._normalize_language_hint(language_hint)
 
         self.target_dir = os.path.join(os.getcwd(), "temp")
 
-    # ---------------------------------------------------------
+    @staticmethod
+    def _normalize_language_hint(language_hint: str) -> str:
+        """Normalize UI language labels to the detector's stable IDs."""
+        value = str(language_hint or "auto").strip().lower()
+        aliases = {
+            "auto detect": "auto",
+            "autodetect": "auto",
+            "js": "javascript",
+            "node": "javascript",
+            "ts": "typescript",
+            "c++": "cpp",
+            "cxx": "cpp",
+            "c#": "csharp",
+            "cs": "csharp",
+            "golang": "go",
+            "rs": "rust",
+            "kt": "kotlin",
+        }
+        return aliases.get(value, value)
+
+    # =========================================================
     # NAME SANITIZATION
-    # ---------------------------------------------------------
+    # =========================================================
 
-    def _sanitize_name(self, name):
+    def _sanitize_name(self, name: str) -> str:
         """
-        Sanitize name according to naming rules:
+        Convert a name into a safe branch-name component.
 
-        1. Convert to UPPERCASE
-        2. Replace spaces with underscores
-        3. Remove special characters
-        4. Remove multiple consecutive underscores
-        5. Remove leading/trailing underscores
+        Example:
+            Suhas Kumar H R
+            ->
+            SUHAS_KUMAR_H_R
         """
 
-        name = name.upper()
+        name = str(name or "").upper()
 
-        # Replace spaces with underscores
         name = name.replace(" ", "_")
 
-        # Remove special characters
-        name = re.sub(r"[^A-Z0-9_]", "", name)
+        name = re.sub(
+            r"[^A-Z0-9_]",
+            "",
+            name
+        )
 
-        # Remove multiple underscores
-        name = re.sub(r"_+", "_", name)
+        name = re.sub(
+            r"_+",
+            "_",
+            name
+        )
 
-        # Remove leading/trailing underscores
-        name = name.strip("_")
+        return name.strip("_")
 
-        return name
-
-    # ---------------------------------------------------------
+    # =========================================================
     # MAIN EXECUTION
-    # ---------------------------------------------------------
+    # =========================================================
 
-    def execute(self):
+    def execute(self) -> dict[str, Any]:
 
         print("\n--- [AGENT START]: RepoPrepAgent ---")
 
+        # -----------------------------------------------------
         # Clone repository
+        # -----------------------------------------------------
+
         if not self._clone_repo():
+
             return {
                 "status": "FAILED",
                 "error": "Cloning failed"
             }
 
-        # Detect and prepare environment
-        env_info = self._setup_environment()
+        # -----------------------------------------------------
+        # Detect project environment
+        # -----------------------------------------------------
 
-        # Branch naming convention
+        try:
+
+            environment = self._detect_environment()
+
+        except Exception as e:
+
+            print(
+                f"[ERROR] Environment detection failed: {e}"
+            )
+
+            return {
+                "status": "FAILED",
+                "error": f"Environment detection failed: {e}"
+            }
+
+        # -----------------------------------------------------
+        # Generate branch name
+        # -----------------------------------------------------
+
         branch_name = (
-            f"{self.team_name}_{self.leader_name}_AI_Fix"
+            f"{self.team_name}_"
+            f"{self.leader_name}_"
+            f"AI_Fix"
         )
 
         print(
             f"[LOG] Generated branch name: {branch_name}"
         )
 
+        # -----------------------------------------------------
+        # Print environment information
+        # -----------------------------------------------------
+
         print(
-            f"[SUCCESS] Environment detected: {env_info}"
+            "[SUCCESS] Environment detected:"
+        )
+
+        print(
+            f"    Language      : "
+            f"{environment.get('language')}"
+        )
+
+        print(
+            f"    Framework     : "
+            f"{environment.get('framework')}"
+        )
+
+        print(
+            f"    Package Mgr   : "
+            f"{environment.get('package_manager')}"
+        )
+
+        print(
+            f"    Build System  : "
+            f"{environment.get('build_system')}"
+        )
+
+        print(
+            f"    Project Path  : "
+            f"{environment.get('project_path')}"
+        )
+
+        print(
+            f"    Relative Path : "
+            f"{environment.get('relative_project_path')}"
+        )
+
+        print(
+            f"    Confidence    : "
+            f"{environment.get('confidence')}"
         )
 
         print(
@@ -98,13 +174,13 @@ class RepoPrepAgent:
         return {
             "status": "SUCCESS",
             "repo_path": self.target_dir,
-            "environment": env_info,
+            "environment": environment,
             "branch_name": branch_name
         }
 
-    # ---------------------------------------------------------
+    # =========================================================
     # CLONE REPOSITORY
-    # ---------------------------------------------------------
+    # =========================================================
 
     def _clone_repo(self):
 
@@ -116,12 +192,16 @@ class RepoPrepAgent:
             )
 
             try:
-                shutil.rmtree(self.target_dir)
+
+                shutil.rmtree(
+                    self.target_dir
+                )
 
             except Exception as e:
 
                 print(
-                    f"[ERROR] Unable to clean directory: {str(e)}"
+                    f"[ERROR] Unable to clean directory: "
+                    f"{str(e)}"
                 )
 
                 return False
@@ -151,431 +231,499 @@ class RepoPrepAgent:
 
             return False
 
-    # ---------------------------------------------------------
-    # CHECK TOOL
-    # ---------------------------------------------------------
+    # =========================================================
+    # READ PROJECT CONFIGURATION
+    # =========================================================
 
-    def _is_tool_installed(self, name):
-
-        return shutil.which(name) is not None
-
-    # ---------------------------------------------------------
-    # FIND NODE PROJECT
-    # ---------------------------------------------------------
-
-    def _find_node_project(self):
+    def _load_project_config(self, repo_path: Path):
         """
-        Find the directory containing package.json.
+        Read optional acr-project.json from repository root.
 
-        Checks:
-        1. Repository root
-        2. frontend
-        3. client
-        4. web
-        5. app
-        6. Other nested directories
+        Example:
 
-        node_modules and build directories are ignored.
+        {
+          "project": "python",
+          "language": "python",
+          "path": "python"
+        }
+
+        The configuration is optional.
+
+        If it does not exist, automatic project detection
+        is used.
         """
 
-        repo_path = Path(self.target_dir)
+        config_path = repo_path / "acr-project.json"
 
-        # -----------------------------------------------------
-        # Root package.json
-        # -----------------------------------------------------
+        if not config_path.exists():
 
-        root_package = repo_path / "package.json"
+            print(
+                "[LOG] No acr-project.json found."
+            )
 
-        if root_package.exists():
+            print(
+                "[LOG] Using automatic project detection."
+            )
 
-            return repo_path
+            return {}
 
-        # -----------------------------------------------------
-        # Preferred frontend directories
-        # -----------------------------------------------------
+        try:
 
-        preferred_directories = [
-            "frontend",
-            "client",
-            "web",
-            "app"
-        ]
+            print(
+                f"[LOG] Reading project configuration: "
+                f"{config_path}"
+            )
 
-        for directory in preferred_directories:
+            with open(
+                config_path,
+                "r",
+                encoding="utf-8"
+            ) as file:
 
-            project_dir = repo_path / directory
+                config = json.load(file)
 
-            if (
-                project_dir.is_dir()
-                and (project_dir / "package.json").exists()
-            ):
+            if not isinstance(config, dict):
 
-                return project_dir
+                raise ValueError(
+                    "acr-project.json must contain a JSON object."
+                )
 
-        # -----------------------------------------------------
-        # Search remaining nested directories
-        # -----------------------------------------------------
+            print(
+                "[SUCCESS] Project configuration loaded."
+            )
 
-        for package_file in repo_path.rglob("package.json"):
+            print(
+                f"[LOG] Configured project: "
+                f"{config.get('project')}"
+            )
 
-            parts = set(package_file.parts)
+            print(
+                f"[LOG] Configured language: "
+                f"{config.get('language')}"
+            )
 
-            if (
-                "node_modules" in parts
-                or ".next" in parts
-                or "dist" in parts
-                or "build" in parts
-            ):
-                continue
+            print(
+                f"[LOG] Configured path: "
+                f"{config.get('path')}"
+            )
 
-            return package_file.parent
+            return config
 
-        return None
+        except Exception as e:
 
-    # ---------------------------------------------------------
-    # SETUP ENVIRONMENT
-    # ---------------------------------------------------------
+            raise RuntimeError(
+                f"Unable to read acr-project.json: {e}"
+            )
 
-    def _setup_environment(self):
+    # =========================================================
+    # RESOLVE CONFIGURED PROJECT PATH
+    # =========================================================
+
+    def _resolve_configured_project_path(
+        self,
+        repo_path: Path,
+        config: dict
+    ):
         """
-        Detect the project language and install dependencies.
+        Resolve the selected project path.
 
-        Supported:
-        - Python
-        - JavaScript
-        - TypeScript
-        - Java
+        Example:
 
-        Also supports nested Node/TypeScript projects such as:
+            "path": "python"
 
-            repository/
-                backend/
-                frontend/
-                    package.json
-                    tsconfig.json
+        becomes:
+
+            <cloned_repo>/python
         """
 
-        repo_path = Path(self.target_dir)
+        configured_path = config.get("path")
 
-        files = set(
-            os.listdir(self.target_dir)
+        if not configured_path:
+            return None
+
+        configured_path = str(
+            configured_path
+        ).strip()
+
+        if not configured_path:
+            return None
+
+        project_path = (
+            repo_path / configured_path
+        ).resolve()
+
+        repo_resolved = repo_path.resolve()
+
+        # -----------------------------------------------------
+        # Security check:
+        # Project path must remain inside cloned repository.
+        # -----------------------------------------------------
+
+        try:
+
+            project_path.relative_to(
+                repo_resolved
+            )
+
+        except ValueError:
+
+            raise RuntimeError(
+                "Configured project path is outside "
+                "the cloned repository."
+            )
+
+        if not project_path.exists():
+
+            raise RuntimeError(
+                f"Configured project path does not exist: "
+                f"{configured_path}"
+            )
+
+        if not project_path.is_dir():
+
+            raise RuntimeError(
+                f"Configured project path is not a directory: "
+                f"{configured_path}"
+            )
+
+        print(
+            f"[SUCCESS] Configured project selected: "
+            f"{project_path}"
         )
 
-        # -----------------------------------------------------
-        # USE CENTRAL LANGUAGE DETECTOR
-        # -----------------------------------------------------
+        return project_path
 
-        detected_language = detect_project_language(
+    def _find_language_project(self, repo_path: Path, language_hint: str):
+        """Find a real subproject matching an explicit language selection.
+
+        Multi-language demo repositories commonly contain one directory per
+        language and a root ``acr-project.json`` that documents only one of
+        them.  The explicit UI selection must win over that documentation;
+        otherwise selecting C++ would silently execute the Java directory.
+        """
+        ignored = {
+            ".git", ".next", "node_modules", "venv", ".venv", "env",
+            "__pycache__", "dist", "build", "target", "bin", "obj",
+            ".idea", ".vscode", "coverage", "temp",
+        }
+        candidates: list[Path] = [repo_path]
+        for current, dirs, _files in os.walk(repo_path):
+            current_path = Path(current)
+            dirs[:] = [d for d in dirs if d not in ignored and not d.startswith(".")]
+            try:
+                depth = len(current_path.relative_to(repo_path).parts)
+            except ValueError:
+                continue
+            if depth >= 3:
+                dirs[:] = []
+                continue
+            for dirname in dirs:
+                candidates.append(current_path / dirname)
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            candidate = candidate.resolve()
+            key = str(candidate).lower()
+            if key in seen or not candidate.is_dir():
+                continue
+            seen.add(key)
+            try:
+                details = detect_project_details(str(candidate))
+            except Exception as exc:
+                print(f"[WARN] Could not inspect candidate {candidate}: {exc}")
+                continue
+            if details.get("language_id") == language_hint:
+                return candidate, details
+        return None, None
+
+    # =========================================================
+    # ENVIRONMENT DETECTION
+    # =========================================================
+
+    def _detect_environment(self):
+
+        repo_path = Path(
             self.target_dir
         )
 
         print(
-            f"[LOG] Language detector result: "
-            f"{detected_language}"
+            "[LOG] Running structured project detection..."
         )
 
-        # =====================================================
-        # 1. JAVA PROJECT
-        # =====================================================
+        # -----------------------------------------------------
+        # Read optional project configuration
+        # -----------------------------------------------------
 
-        if detected_language == "java":
+        config = self._load_project_config(
+            repo_path
+        )
 
-            # -------------------------------------------------
-            # Maven
-            # -------------------------------------------------
+        # -----------------------------------------------------
+        # Select configured subproject if available
+        # -----------------------------------------------------
 
-            if "pom.xml" in files:
+        configured_project_path = (
+            self._resolve_configured_project_path(
+                repo_path,
+                config
+            )
+        )
 
-                print(
-                    "[LOG] Detected Java Maven project."
+        requested_language = self.language_hint
+        language_match = True
+
+        if requested_language != "auto":
+            configured_details = None
+            if configured_project_path:
+                configured_details = detect_project_details(str(configured_project_path))
+            if configured_details and configured_details.get("language_id") == requested_language:
+                detection_path = configured_project_path
+                details = configured_details
+            else:
+                detection_path, details = self._find_language_project(
+                    repo_path,
+                    requested_language,
                 )
-
-                if self._is_tool_installed("mvn"):
-
-                    print(
-                        "[LOG] Maven is installed."
+                if detection_path is None or details is None:
+                    raise RuntimeError(
+                        f"Requested language '{requested_language}' was not found in repository. "
+                        "Choose Auto detect or a language that has source/configuration files."
                     )
+                # The configured path is only a scope for auto-detect (or when
+                # it matches the requested language). Do not let its Java path
+                # overwrite an explicitly selected C/C++/Go/etc. subproject.
+                configured_project_path = None
+                language_match = True
+        elif configured_project_path:
+            detection_path = configured_project_path
+            details = None
+        else:
+            detection_path = repo_path
+            details = None
 
-                    return "java (maven)"
+        print(
+            f"[LOG] Detection path: "
+            f"{detection_path}"
+        )
 
-                else:
+        # -----------------------------------------------------
+        # Run language/project detector
+        # -----------------------------------------------------
 
-                    print(
-                        "[WARN] Maven is not installed."
-                    )
+        if details is None:
+            details = detect_project_details(str(detection_path))
 
-                    return "java (maven - tool missing)"
+        if not isinstance(
+            details,
+            dict
+        ):
 
-            # -------------------------------------------------
-            # Gradle
-            # -------------------------------------------------
+            raise RuntimeError(
+                "detect_project_details() "
+                "did not return a dictionary."
+            )
 
-            elif (
-                "build.gradle" in files
-                or "build.gradle.kts" in files
-            ):
+        language_id = details.get(
+            "language_id",
+            "unknown"
+        )
 
-                print(
-                    "[LOG] Detected Java Gradle project."
+        language = details.get(
+            "language",
+            "Unknown"
+        )
+
+        framework = details.get(
+            "framework",
+            "Unknown"
+        )
+
+        package_manager = details.get(
+            "package_manager",
+            "Unknown"
+        )
+
+        build_system = details.get(
+            "build_system",
+            "Unknown"
+        )
+
+        project_path = details.get(
+            "project_path"
+        )
+
+        confidence = details.get(
+            "confidence",
+            0.0
+        )
+
+        # -----------------------------------------------------
+        # If configured project was selected,
+        # make sure detector stays inside that project.
+        # -----------------------------------------------------
+
+        if configured_project_path:
+
+            if not project_path:
+
+                project_path = str(
+                    configured_project_path
                 )
-
-                if (
-                    self._is_tool_installed("gradle")
-                    or (repo_path / "gradlew").exists()
-                ):
-
-                    print(
-                        "[LOG] Gradle is available."
-                    )
-
-                    return "java (gradle)"
-
-                else:
-
-                    print(
-                        "[WARN] Gradle is not installed."
-                    )
-
-                    return "java (gradle - tool missing)"
-
-            # -------------------------------------------------
-            # Simple Java project
-            # -------------------------------------------------
 
             else:
 
-                java_files = list(
-                    repo_path.rglob("*.java")
-                )
+                detected_path = Path(
+                    project_path
+                ).resolve()
 
-                print(
-                    "[LOG] Detected simple Java project."
-                )
-
-                print(
-                    f"[LOG] Java files found: "
-                    f"{len(java_files)}"
-                )
-
-                if self._is_tool_installed("javac"):
-
-                    print(
-                        "[LOG] Java compiler (javac) is installed."
-                    )
-
-                    return "java"
-
-                else:
-
-                    print(
-                        "[WARN] javac is not installed."
-                    )
-
-                    return "java (compiler missing)"
-
-        # =====================================================
-        # 2. PYTHON PROJECT
-        # =====================================================
-
-        if detected_language == "python":
-
-            # Formal Python project
-            if "requirements.txt" in files:
-
-                print(
-                    "[LOG] Detected Python "
-                    "(requirements.txt)."
-                )
-
-                print(
-                    "[LOG] Installing Python dependencies..."
+                selected_path = (
+                    configured_project_path.resolve()
                 )
 
                 try:
 
-                    subprocess.run(
-                        [
-                            "pip",
-                            "install",
-                            "-r",
-                            "requirements.txt"
-                        ],
-                        cwd=self.target_dir,
-                        check=True
+                    detected_path.relative_to(
+                        selected_path
                     )
+
+                except ValueError:
 
                     print(
-                        "[SUCCESS] Python dependencies installed."
+                        "[WARN] Detector returned a path "
+                        "outside the configured project."
                     )
 
-                    return "python"
-
-                except subprocess.CalledProcessError:
-
-                    print(
-                        "[ERROR] Python dependency installation failed."
+                    project_path = str(
+                        configured_project_path
                     )
 
-                    return "python (failed install)"
+        # -----------------------------------------------------
+        # Normalize project path
+        # -----------------------------------------------------
 
-            # Simple Python project
-            else:
+        if project_path:
 
-                python_files = list(
-                    repo_path.rglob("*.py")
-                )
+            project_path = os.path.abspath(
+                project_path
+            )
 
-                if python_files:
+        else:
 
-                    print(
-                        "[LOG] Detected Simple Python Project."
-                    )
+            project_path = str(
+                detection_path
+            )
 
-                    print(
-                        f"[LOG] Python files found: "
-                        f"{len(python_files)}"
-                    )
+        # -----------------------------------------------------
+        # Make sure detected project belongs to
+        # the cloned repository.
+        # -----------------------------------------------------
 
-                    return "python_simple"
+        try:
 
-        # =====================================================
-        # 3. JAVASCRIPT / TYPESCRIPT PROJECT
-        # =====================================================
+            Path(
+                project_path
+            ).resolve().relative_to(
+                repo_path.resolve()
+            )
 
-        if (
-            detected_language == "javascript"
-            or detected_language == "typescript"
-        ):
+        except ValueError:
 
-            # -------------------------------------------------
-            # FIND ROOT OR NESTED NODE PROJECT
-            # -------------------------------------------------
+            print(
+                "[WARN] Detector returned a project path "
+                "outside repository."
+            )
 
-            node_project = self._find_node_project()
+            project_path = str(
+                detection_path
+            )
 
-            if node_project:
+        # -----------------------------------------------------
+        # Create structured environment
+        # -----------------------------------------------------
 
-                print(
-                    f"[LOG] Node project found at: "
-                    f"{node_project}"
-                )
+        environment = {
+            "language_id": language_id,
+            "language": language,
+            "framework": framework,
+            "package_manager": package_manager,
+            "build_system": build_system,
+            "project_path": project_path,
+            "confidence": float(confidence),
+            "requested_language": requested_language,
+            "language_match": language_match and (
+                requested_language == "auto" or language_id == requested_language
+            ),
+        }
 
-                # ---------------------------------------------
-                # TypeScript
-                # ---------------------------------------------
+        # -----------------------------------------------------
+        # Additional metadata
+        # -----------------------------------------------------
 
-                if detected_language == "typescript":
-
-                    print(
-                        "[LOG] Detected TypeScript "
-                        "project with package.json."
-                    )
-
-                # ---------------------------------------------
-                # JavaScript
-                # ---------------------------------------------
-
-                else:
-
-                    print(
-                        "[LOG] Detected JavaScript "
-                        "project with package.json."
-                    )
-
-                # ---------------------------------------------
-                # Bun
-                # ---------------------------------------------
-
-                if self._is_tool_installed("bun"):
-
-                    print(
-                        "[LOG] Bun detected."
-                    )
-
-                    print(
-                        "[LOG] Running 'bun install'..."
-                    )
-
-                    result = subprocess.run(
-                        ["bun", "install"],
-                        cwd=str(node_project),
-                        check=False
-                    )
-
-                    if result.returncode != 0:
-
-                        print(
-                            "[WARN] Bun dependency installation "
-                            "returned an error."
-                        )
-
-                    if detected_language == "typescript":
-
-                        return "typescript (bun)"
-
-                    return "javascript (bun)"
-
-                # ---------------------------------------------
-                # npm
-                # ---------------------------------------------
-
-                else:
-
-                    print(
-                        "[LOG] npm detected."
-                    )
-
-                    print(
-                        "[LOG] Running 'npm install'..."
-                    )
-
-                    result = subprocess.run(
-                        ["npm", "install"],
-                        cwd=str(node_project),
-                        check=False
-                    )
-
-                    if result.returncode != 0:
-
-                        print(
-                            "[WARN] npm dependency installation "
-                            "returned an error."
-                        )
-
-                    if detected_language == "typescript":
-
-                        return "typescript (npm)"
-
-                    return "javascript (npm)"
-
-            # -------------------------------------------------
-            # Simple JS/TS project
-            # -------------------------------------------------
-
-            else:
-
-                if detected_language == "typescript":
-
-                    print(
-                        "[LOG] Detected Simple TypeScript Project."
-                    )
-
-                    return "typescript_simple"
-
-                else:
-
-                    print(
-                        "[LOG] Detected Simple JavaScript Project."
-                    )
-
-                    return "javascript_simple"
-
-        # =====================================================
-        # 4. UNKNOWN PROJECT
-        # =====================================================
-
-        print(
-            "[WARN] No recognized code files found."
+        environment["relative_project_path"] = (
+            os.path.relpath(
+                project_path,
+                str(repo_path)
+            )
         )
 
-        return "unknown"
+        # -----------------------------------------------------
+        # Include configured project information
+        # -----------------------------------------------------
+
+        if config:
+
+            environment["configured_project"] = (
+                config.get("project")
+            )
+
+            environment["configured_language"] = (
+                config.get("language")
+            )
+
+        # -----------------------------------------------------
+        # Human-readable logs
+        # -----------------------------------------------------
+
+        print(
+            f"[LOG] Language detector result: "
+            f"{language}"
+        )
+
+        print(
+            f"[LOG] Framework: "
+            f"{framework}"
+        )
+
+        print(
+            f"[LOG] Package manager: "
+            f"{package_manager}"
+        )
+
+        print(
+            f"[LOG] Build system: "
+            f"{build_system}"
+        )
+
+        print(
+            f"[LOG] Project path: "
+            f"{project_path}"
+        )
+
+        print(
+            f"[LOG] Relative project path: "
+            f"{environment.get('relative_project_path')}"
+        )
+
+        print(
+            f"[LOG] Detection confidence: "
+            f"{confidence}"
+        )
+
+        return environment
+
+
+if __name__ == "__main__":
+
+    print(
+        "RepoPrepAgent module loaded successfully."
+    )

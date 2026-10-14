@@ -3,6 +3,10 @@ venv/
 env/
 __pycache__/
 *.pyc
-.env
+.env*
 .vscode/
 *.log
+backend/data/
+backend zip.zip
+*.sqlite3
+*.sqlite3-journal

@@ -36,6 +36,80 @@ The system combines a **Next.js web interface**, **FastAPI backend**, **Socket.I
 
 # 🎯 Overview
 
+## Current implementation status (October 2026)
+
+The Python backend is type-checked and compiles successfully. The dashboard route is now `/dashboard` and consumes real Socket.IO worker events. The prior simulated `/test` run and its fake PR URL were removed; `/test` now displays the same real dashboard for compatibility.
+
+The two assistants are deliberately separate:
+
+- **AURA AI** at the top right answers general programming and DevOps questions through the Gemini API. It receives only the question explicitly typed by the user; pipeline logs and credentials are never sent to it.
+- **Pipeline Assistant** uses only the actual stage, Socket.IO logs, verified fixes, and verified PR data from the live browser session. It does not call Gemini and does not invent pipeline data.
+
+The previous human/team image is replaced by the local `frontend/public/simple-ai-bot.svg` image. It does not need an image-generation API or another secret.
+
+### Database and authentication (current implementation)
+
+The active project uses **SQLite**, a free SQL database included with Python. It
+does not require PostgreSQL, Supabase, Prisma, a connection pool, or a database
+container. On first backend startup, `backend/data/acr_agent.sqlite3` is created
+automatically. Login and signup store salted PBKDF2 password hashes and use an
+HTTP-only session cookie; the dashboard and pipeline socket require that session.
+
+The old `CICD\ACR_AGENT\frontend` copy may still contain Prisma/PostgreSQL files,
+but it is not the active project and should not be used to run this copy.
+
+### Exact environment-file steps
+
+1. In `backend`, copy `.env.example` to `.env` once. Put `GITHUB_TOKEN`,
+   `GEMINI_API_KEY`, and the SQLite settings in **`backend/.env` only**.
+2. In `frontend`, optionally copy `.env.example` to `.env.local` and keep only
+   `NEXT_PUBLIC_ACR_API_URL=http://localhost:8000` there.
+3. Do not create or edit `DATABASE_URL`, Prisma, Supabase, or PostgreSQL values.
+   Do not put Gemini/GitHub secrets in any frontend file.
+4. Start the backend once; it creates `backend/data/acr_agent.sqlite3`. That
+   file is local, free, ignored by Git, and needs no migration command.
+
+### Run the complete application locally (Windows PowerShell)
+
+Open three terminals. If PowerShell says script execution is disabled for `npm`, use `npm.cmd` as shown.
+
+```powershell
+# Terminal 1: start Docker Desktop, then build the isolated worker image
+cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
+docker version
+docker build -t rift-worker:latest -f Dockerfile.worker .
+```
+
+```powershell
+# Terminal 2: backend API and Socket.IO server
+cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```powershell
+# Terminal 3: frontend
+cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\frontend
+npm.cmd install
+npm.cmd run dev
+```
+
+Open `http://localhost:3000/dashboard`. The GitHub repository field is intentionally blank on every new dashboard session; enter the HTTPS repository you want to inspect before starting a run. Set `GEMINI_API_KEY` and `GITHUB_TOKEN` only in `backend/.env` before starting a repair run. Do not place either value in a `NEXT_PUBLIC_` frontend variable. Docker Desktop must be running before ACR_AGENT can build or test an untrusted repository.
+
+If `backend/.env` does not exist, copy `backend/.env.example` to `backend/.env` and fill in only your own keys. AURA and the healing agent use `GEMINI_API_KEY`. AURA uses the faster `gemini-3.5-flash-lite` model, bounds each request to 25 seconds, and tries `ACR_AURA_FALLBACK_MODEL` for temporary capacity errors.
+
+### Important operating limits
+
+- Email/password authentication is implemented locally with SQLite. Google OAuth is also supported when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the registered callback URL are added to `backend/.env`.
+- The frontend uses system font fallbacks rather than downloading Google Fonts during the build, so `npm.cmd run build` does not depend on Google Fonts network access.
+- The frontend uses system font fallbacks rather than downloading Google Fonts during the build, so `npm.cmd run build` does not depend on Google Fonts network access.
+- The Docker worker includes toolchains for Python, JavaScript/TypeScript, Java, Kotlin, C/C++, C#, Go, Rust and PHP. Each language still needs an end-to-end run against a representative repository before claiming universal autonomous repair success.
+- A successful repair requires a running Docker Desktop instance, a valid Gemini key, a GitHub token with repository write/PR permission, and a repository whose checks actually pass after the patch. ACR_AGENT reports unresolved instead of claiming success when verification fails.
+
+### Public hosting
+
+ACR_AGENT can be published as a public website, but the backend must run on a server that can run Docker because it executes untrusted repository checks inside worker containers. A practical layout is a Next.js frontend on Vercel and the FastAPI backend plus Docker worker on a Docker-enabled VPS. Set only `NEXT_PUBLIC_ACR_API_URL` in the frontend; keep `GEMINI_API_KEY`, `GITHUB_TOKEN`, OAuth secrets, and the SQLite database on the backend server. For HTTPS production hosting set `ACR_FRONTEND_ORIGIN` to the frontend URL, `GOOGLE_REDIRECT_URI` to the public backend callback, and `ACR_COOKIE_SECURE=true`. Add authentication, rate limits, repository limits, persistent SQLite storage, and resource/time limits before allowing unknown public users to run repositories.
+
 Modern software projects can contain syntax errors, build failures, type issues, logical bugs, and other problems that require developers to manually investigate and repair.
 
 ACR_AGENT automates this process.
@@ -98,13 +172,22 @@ Pull Request
 
 ACR_AGENT accepts a GitHub repository URL and prepares the repository for analysis.
 
-It can detect common project environments including:
+It can detect and analyze:
 
 * Python
-* JavaScript
-* TypeScript
-* Simple Python projects
-* Simple JavaScript projects
+* JavaScript and TypeScript
+* Java and Kotlin
+* C and C++
+* C#/.NET
+* Go
+* Rust
+* PHP
+
+The dashboard language selector is forwarded to the Docker worker as
+`LANGUAGE_HINT`. For a multi-language repository, an explicit selection looks
+for the matching subproject (even when the root `acr-project.json` documents a
+different language). If the selected language is not present, the run stops
+with a clear detection error instead of silently compiling another language.
 
 ---
 
@@ -368,7 +451,7 @@ ACR_AGENT/
 └── README.md
 ```
 
-> The authentication files shown above represent the Google authentication integration being added to the project. The original repository currently contains the core backend and frontend files documented in its source README.
+> The current implementation uses the SQLite email/password session described below. Google/GitHub OAuth is optional and is not required for local execution.
 
 ---
 
@@ -535,7 +618,7 @@ These capabilities are present in the current frontend implementation.
 
 # 🔐 Authentication
 
-ACR_AGENT uses Google-based authentication for protected access to the application.
+ACR_AGENT uses a SQLite-backed email/password session for protected access to the application.
 
 ### Authentication Flow
 
@@ -546,10 +629,10 @@ User
 Login Page
  │
  ▼
-Continue with Google
+Email and password
  │
  ▼
-Google Authentication
+HTTP-only SQLite session
  │
  ▼
 Authenticated Session
@@ -610,12 +693,7 @@ frontend/.env.local
 Example:
 
 ```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-
-AUTH_SECRET=your_auth_secret
+NEXT_PUBLIC_ACR_API_URL=http://localhost:8000
 ```
 
 ### Security
@@ -625,8 +703,6 @@ Never expose:
 ```text
 GEMINI_API_KEY
 GITHUB_TOKEN
-GOOGLE_CLIENT_SECRET
-AUTH_SECRET
 ```
 
 to the client-side application.
@@ -646,9 +722,8 @@ Install:
 * npm
 * Python 3.12
 * Docker
-* A Google Gemini API key
+* A Gemini API key for AURA and healing
 * A GitHub token
-* Google OAuth credentials
 
 ---
 
@@ -703,8 +778,29 @@ Add:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
+ACR_AURA_MODEL=gemini-3.5-flash-lite
+ACR_AURA_FALLBACK_MODEL=gemini-3.8-flash
 GITHUB_TOKEN=your_github_token
+GOOGLE_CLIENT_ID=your_google_web_client_id
+GOOGLE_CLIENT_SECRET=your_google_web_client_secret
+GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
+ACR_HEAL_MODEL=gemini-3.8-flash
+ACR_CHAT_MODEL=gemini-3.8-flash
+PIPELINE_TIME_LIMIT_SECONDS=270
+MAX_RETRIES=5
+ACR_AUTH_DB=./data/acr_agent.sqlite3
+ACR_AUTH_COOKIE=acr_session
+ACR_COOKIE_SECURE=false
+ACR_FRONTEND_ORIGIN=http://localhost:3000
 ```
+
+`GEMINI_API_KEY` and `GITHUB_TOKEN` are server-side secrets. Never
+copy them into `frontend/.env.local` or any `NEXT_PUBLIC_` variable.
+The SQLite path is a file path, not a PostgreSQL connection URL.
+Google OAuth is optional; register the exact redirect URI above in Google Cloud
+Console under the OAuth web client. The Google button redirects to
+`/auth/google/start`, verifies the callback state, and then creates the same
+SQLite session used by email/password login.
 
 ---
 
@@ -732,12 +828,6 @@ Install dependencies:
 npm install
 ```
 
-Install authentication dependency:
-
-```bash
-npm install next-auth
-```
-
 ---
 
 # 6. Configure Frontend Environment
@@ -751,12 +841,10 @@ frontend/.env.local
 Add:
 
 ```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-AUTH_SECRET=your_auth_secret
+NEXT_PUBLIC_ACR_API_URL=http://localhost:8000
 ```
+
+Do not add `DATABASE_URL`, Prisma settings, or API secrets to the frontend.
 
 ---
 
@@ -797,7 +885,7 @@ http://localhost:3000
 
 ---
 
-# 🔐 Google Login Flow
+# 🔐 Local Login Flow
 
 When the application starts:
 
@@ -805,18 +893,18 @@ When the application starts:
 http://localhost:3000
        │
        ▼
- Authentication Check
+ SQLite session check
        │
        ├── Not authenticated
        │          │
        │          ▼
-       │       /login
+       │       /auth
        │          │
        │          ▼
-       │   Continue with Google
+       │   Email + password
        │          │
        │          ▼
-       │    Google OAuth
+       │    HTTP-only cookie
        │          │
        │          ▼
        └──────► Dashboard
@@ -826,7 +914,7 @@ http://localhost:3000
 
 # 🧪 Testing Mode
 
-The project also contains a frontend test page for testing the dashboard behavior without connecting to the actual backend.
+The `/test` route renders the same real dashboard as `/dashboard`; it is retained for compatibility with older links.
 
 Run:
 
@@ -841,7 +929,7 @@ Then open:
 http://localhost:3000/test
 ```
 
-This provides a simulated pipeline for frontend testing.
+Use `/auth` first, then start a real run from the dashboard.
 
 ---
 
@@ -1032,9 +1120,7 @@ Also verify that Docker is running.
 
 Check:
 
-```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-```
+Use `NEXT_PUBLIC_ACR_API_URL=http://localhost:8000` in `frontend/.env.local` if the frontend API is not on its default address.
 
 Then verify:
 
@@ -1044,21 +1130,11 @@ http://localhost:8000/health
 
 ---
 
-## Google Login fails
+## Login or signup fails
 
-Verify:
-
-* Google Client ID
-* Google Client Secret
-* `AUTH_SECRET`
-* OAuth authorized origin
-* OAuth redirect URI
-
-For local development, the callback URL should be:
-
-```text
-http://localhost:3000/api/auth/callback/google
-```
+Make sure the backend is running and that `backend/data/acr_agent.sqlite3` is
+writable. Then open `/auth`, create an account, and sign in with the same email
+and password. No PostgreSQL service or `DATABASE_URL` is needed.
 
 ---
 
@@ -1214,3 +1290,9 @@ Add the project's chosen license here before publishing the project publicly.
 > **Accepts a repository → analyzes the code → identifies problems → uses AI to generate fixes → validates the changes → commits the repair → pushes the changes → creates a Pull Request.**
 
 The goal is to make software debugging and repair faster, more automated, and easier to monitor through a unified dashboard.
+
+## Current verification notes
+
+The worker detects and analyzes Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, PHP, and Kotlin. Each language uses its detected project build system where available and returns the actual compiler/test output to KNN, Gemini, the dashboard, and the run chatbot. C# source-only repositories are compiled in a disposable .NET SDK project; PHP Composer dependencies and C/C++ Makefiles are validated before source review.
+
+Runs have a configurable five-minute budget (`PIPELINE_TIME_LIMIT_SECONDS=270`) and the dashboard reports the measured time taken beneath the pipeline status. The value is telemetry from the worker result; it does not claim success unless the verification stage passes.

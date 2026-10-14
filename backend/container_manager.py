@@ -1,8 +1,11 @@
 import json
 import os
 import sys
+import threading
+import time
 import docker
 from typing import Callable, Optional
+from docker.errors import ImageNotFound
 
 WORKER_IMAGE = "rift-worker:latest"
 
@@ -12,6 +15,7 @@ def run_pipeline_in_container(
     team_name: str, 
     leader_name: str,
     retry_limit: int = 5,
+    language_hint: str = "auto",
     log_callback: Optional[Callable[[str, str, Optional[str]], None]] = None
 ) -> dict:
     """
@@ -23,6 +27,7 @@ def run_pipeline_in_container(
         team_name: Team name
         leader_name: Leader name
         retry_limit: Maximum number of healing iterations (default: 5)
+        language_hint: Explicit language ID from the dashboard, or ``auto``
         log_callback: Optional synchronous function to emit logs via WebSocket
         
     Returns:
@@ -30,8 +35,15 @@ def run_pipeline_in_container(
     """
     client = docker.from_env()
     container = None
+    started_at = time.monotonic()
+    timed_out = False
+    timeout_timer = None
     
-    def emit_log(message: str, log_type: str = "info", stage: str = None):
+    def emit_log(
+        message: str,
+        log_type: str = "info",
+        stage: Optional[str] = None,
+    ) -> None:
         """Helper to emit logs both to console and websocket"""
         print(message, flush=True)
         if log_callback:
@@ -45,9 +57,13 @@ def run_pipeline_in_container(
         "REPO_URL": repo_url,
         "TEAM_NAME": team_name,
         "LEADER_NAME": leader_name,
+        "LANGUAGE_HINT": str(language_hint or "auto").strip().lower(),
         "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
+        "ACR_HEAL_MODEL": os.getenv("ACR_HEAL_MODEL", "gemini-3.8-flash"),
+        "ACR_CHAT_MODEL": os.getenv("ACR_CHAT_MODEL", "gemini-3.8-flash"),
         "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
         "MAX_RETRIES": str(retry_limit),
+        "PIPELINE_TIME_LIMIT_SECONDS": os.getenv("PIPELINE_TIME_LIMIT_SECONDS", "270"),
     }
 
     try:
@@ -58,6 +74,30 @@ def run_pipeline_in_container(
             detach=True,
             mem_limit="1g",
         )
+
+        try:
+            configured_limit = int(os.getenv("PIPELINE_TIME_LIMIT_SECONDS", "270"))
+        except (TypeError, ValueError):
+            configured_limit = 270
+        time_limit = max(60, min(configured_limit, 300))
+
+        def stop_overdue_container() -> None:
+            nonlocal timed_out
+            timed_out = True
+            emit_log(
+                f"Pipeline time limit reached ({time_limit} seconds); stopping worker.",
+                "error",
+                "TIMEOUT",
+            )
+            try:
+                if container is not None:
+                    container.stop(timeout=5)
+            except Exception as stop_error:
+                emit_log(f"Unable to stop overdue worker: {stop_error}", "error")
+
+        timeout_timer = threading.Timer(time_limit, stop_overdue_container)
+        timeout_timer.daemon = True
+        timeout_timer.start()
 
         emit_log(f"✅ Container started: {container.short_id}", "success", "Stage 2: Analysis")
         emit_log("📡 Streaming container logs...", "info")
@@ -77,6 +117,19 @@ def run_pipeline_in_container(
 
         # Get stdout-only for JSON parsing
         stdout_logs = container.logs(stdout=True, stderr=False).decode("utf-8").strip()
+
+        if timed_out:
+            elapsed = time.monotonic() - started_at
+            return {
+                "status": "FAILED",
+                "error": f"Pipeline exceeded the {time_limit}-second time limit.",
+                "total_time_seconds": round(elapsed, 1),
+                "total_time_minutes": round(elapsed / 60, 2),
+                "fixes": [],
+                "iterations_used": 0,
+                "total_failures": 0,
+                "pr_link": "N/A",
+            }
 
         if not stdout_logs:
             raise RuntimeError(f"Worker container produced no output (exit code: {exit_code})")
@@ -103,7 +156,7 @@ def run_pipeline_in_container(
         )
         return result
 
-    except docker.errors.ImageNotFound:
+    except ImageNotFound:
         raise RuntimeError(
             f"Worker image '{WORKER_IMAGE}' not found. "
             f"Build it with: docker build -f Dockerfile.worker -t {WORKER_IMAGE} ."
@@ -114,6 +167,8 @@ def run_pipeline_in_container(
         raise RuntimeError(f"Container execution failed: {e}")
 
     finally:
+        if timeout_timer is not None:
+            timeout_timer.cancel()
         if container is not None:
             try:
                 emit_log(f"🧹 Removing container {container.short_id}...", "info")

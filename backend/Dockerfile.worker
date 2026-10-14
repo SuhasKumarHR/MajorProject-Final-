@@ -1,24 +1,105 @@
 FROM python:3.12-bookworm
 
-# Install Git, Node.js, npm, Java JDK, and Maven
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/root/.cargo/bin:/opt/gradle/bin:/opt/kotlin/bin:${PATH}"
+
+# =========================================================
+# System dependencies and language toolchains
+# =========================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
-    nodejs \
-    npm \
+    curl \
+    wget \
+    ca-certificates \
+    unzip \
+    build-essential \
+    cmake \
+    make \
+    gcc \
+    g++ \
     openjdk-17-jdk \
     maven \
+    golang \
+    php-cli \
+    php-mbstring \
+    php-xml \
+    php-curl \
+    php-zip \
+    php-json \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# =========================================================
+# Compact Gradle + Kotlin command-line distributions
+#
+# Debian's Gradle/Kotlin packages pull a large desktop-oriented dependency
+# tree. These official CLI distributions keep the multi-language worker much
+# smaller while providing modern Gradle and kotlinc commands.
+# =========================================================
+ARG GRADLE_VERSION=8.11.1
+ARG KOTLIN_VERSION=2.1.10
+RUN wget -q "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -O /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && mv "/opt/gradle-${GRADLE_VERSION}" /opt/gradle \
+    && rm /tmp/gradle.zip \
+    && wget -q "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" -O /tmp/kotlin.zip \
+    && unzip -q /tmp/kotlin.zip -d /opt \
+    && mv /opt/kotlinc /opt/kotlin \
+    && rm /tmp/kotlin.zip
 
-# Install TypeScript compiler globally
+# =========================================================
+# Node.js 22
+# =========================================================
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# =========================================================
+# TypeScript
+# =========================================================
 RUN npm install -g typescript
 
-# Install Python dependencies
+# =========================================================
+# Rust + Cargo
+# =========================================================
+RUN curl --proto '=https' \
+    --tlsv1.2 \
+    -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal
+
+# =========================================================
+# .NET 8 SDK
+# =========================================================
+RUN curl -fsSL \
+    https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
+    -o /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dotnet-sdk-8.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# =========================================================
+# Composer
+# =========================================================
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# =========================================================
+# Application directory
+# =========================================================
+WORKDIR /app
+
+# =========================================================
+# Python dependencies
+# =========================================================
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy agent source code and entrypoint
+# =========================================================
+# ACR_AGENT worker source
+# =========================================================
 COPY repo_prep_agent.py .
 COPY analysis_agent.py .
 COPY healing_agent.py .
@@ -28,16 +109,30 @@ COPY failure_classifier.py .
 COPY failure_dataset.csv .
 COPY worker_entrypoint.py .
 
-# Verify installed tools
-RUN python --version && \
-    git --version && \
-    node --version && \
-    npm --version && \
-    java --version && \
-    javac --version && \
-    mvn --version && \
-    tsc --version
-
-ENV PYTHONUNBUFFERED=1
+# =========================================================
+# Verify complete toolchain
+# =========================================================
+RUN echo "========== ACR_AGENT TOOLCHAIN CHECK ==========" \
+    && python --version \
+    && pip --version \
+    && git --version \
+    && node --version \
+    && npm --version \
+    && tsc --version \
+    && java --version \
+    && javac --version \
+    && gradle --version \
+    && kotlinc -version \
+    && mvn --version \
+    && gcc --version \
+    && g++ --version \
+    && cmake --version \
+    && go version \
+    && cargo --version \
+    && rustc --version \
+    && dotnet --version \
+    && php --version \
+    && composer --version \
+    && echo "========== TOOLCHAIN CHECK COMPLETE =========="
 
 ENTRYPOINT ["python", "worker_entrypoint.py"]

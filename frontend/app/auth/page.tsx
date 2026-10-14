@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -8,7 +8,7 @@ import {
     Check,
     Eye,
     EyeOff,
-    Github,
+    Chrome,
     LockKeyhole,
     Mail,
     ShieldCheck,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 type AuthMode = "login" | "signup";
+const API_URL = process.env.NEXT_PUBLIC_ACR_API_URL || "http://localhost:8000";
 
 const benefits = [
     "Private release intelligence for your team",
@@ -34,23 +35,50 @@ export default function AuthPage() {
 
     const isSignup = mode === "signup";
 
+    useEffect(() => {
+        const error = new URLSearchParams(window.location.search).get("oauth_error");
+        if (error) {
+            toast.error("Google sign-in failed", { description: error });
+            window.history.replaceState({}, document.title, "/auth");
+        }
+    }, []);
+
     const switchMode = (nextMode: AuthMode) => {
         setMode(nextMode);
         setShowPassword(false);
     };
 
-    const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setIsSubmitting(true);
-
-        window.setTimeout(() => {
-            setIsSubmitting(false);
-            toast.success(isSignup ? "Workspace request received" : "Welcome back to ACR Agent", {
-                description: isSignup
-                    ? "Your secure workspace is ready to be connected."
-                    : "Your release intelligence console is standing by.",
+        const form = new FormData(event.currentTarget);
+        try {
+            const response = await fetch(`${API_URL}/auth/${isSignup ? "signup" : "login"}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    name: String(form.get("name") || ""),
+                    email: String(form.get("email") || ""),
+                    password: String(form.get("password") || ""),
+                    remember,
+                }),
             });
-        }, 650);
+            const body = await response.json() as { user?: { name?: string }; detail?: string };
+            if (!response.ok) {
+                throw new Error(body.detail || "Authentication failed.");
+            }
+            setIsSubmitting(false);
+            toast.success(isSignup ? "Account created" : "Signed in", {
+                description: `Welcome ${body.user?.name || "to ACR Agent"}.`,
+            });
+            window.location.assign("/dashboard");
+        } catch (error) {
+            setIsSubmitting(false);
+            toast.error(error instanceof Error ? error.message : "Authentication failed", {
+                description: "Confirm the backend is running on port 8000.",
+            });
+        }
     };
 
     return (
@@ -170,8 +198,8 @@ export default function AuthPage() {
                     </form>
 
                     <div className="auth-divider"><span>OR CONTINUE WITH</span></div>
-                    <button className="auth-github" type="button" onClick={() => toast.info("GitHub authentication is coming online soon")}>
-                        <Github aria-hidden="true" /> Continue with GitHub
+                    <button className="auth-github" type="button" onClick={() => window.location.assign(`${API_URL}/auth/google/start`)}>
+                        <Chrome aria-hidden="true" /> Continue with Google
                     </button>
 
                     <p className="auth-footnote">
