@@ -15,13 +15,24 @@ from github.GithubException import GithubException
 class GitAgent:
     """Publish only explicit, verified HealingAgent changes."""
 
-    def __init__(self, repo_path, repo_url, branch_name, team_name, leader_name):
+    def __init__(self, repo_path, repo_url, branch_name, team_name, leader_name, project_path=None):
         self.repo_path = Path(repo_path).resolve()
+        self.project_path = self._resolve_project_scope(project_path)
         self.repo_url = str(repo_url)
         self.branch_name = self._sanitize_branch(branch_name)
         self.team_name = str(team_name)
         self.leader_name = str(leader_name)
         self.github_token = os.getenv("GITHUB_TOKEN", "").strip()
+
+    def _resolve_project_scope(self, project_path=None):
+        if not project_path:
+            return self.repo_path
+        candidate = Path(str(project_path)).resolve()
+        try:
+            candidate.relative_to(self.repo_path)
+        except ValueError:
+            return self.repo_path
+        return candidate if candidate.is_dir() else self.repo_path
 
     @staticmethod
     def _sanitize_branch(value):
@@ -46,6 +57,12 @@ class GitAgent:
             try:
                 relative_path = candidate.relative_to(self.repo_path).as_posix()
             except ValueError:
+                continue
+            try:
+                candidate.relative_to(self.project_path)
+            except ValueError:
+                # A selected-language run must never commit another language
+                # directory, even if an AI response mentions it.
                 continue
             if candidate.is_file() and relative_path not in paths:
                 paths.append(relative_path)

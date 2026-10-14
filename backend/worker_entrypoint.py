@@ -595,6 +595,10 @@ def main() -> None:
             healing_agent = HealingAgent(
                 repo_path=repo_path,
                 analysis_result=analysis_result,
+                project_path=analysis_result.get(
+                    "project_path",
+                    environment.get("project_path", repo_path),
+                ),
             )
 
             heal_result = healing_agent.execute(
@@ -758,6 +762,10 @@ def main() -> None:
                 branch_name=target_branch,
                 team_name=team_name,
                 leader_name=leader_name,
+                project_path=environment.get(
+                    "project_path",
+                    repo_path,
+                ),
             )
 
             git_result = git_agent.execute(

@@ -26,8 +26,10 @@ class HealingAgent:
     8. Preserve backups of original files.
     """
 
-    def __init__(self, repo_path, analysis_result):
+    def __init__(self, repo_path, analysis_result, project_path=None):
         self.repo_path = str(repo_path)
+        self.repo_root = Path(repo_path).resolve()
+        self.project_root = self._resolve_project_scope(project_path)
         self.analysis_result = analysis_result
 
         self.api_key = os.getenv("GEMINI_API_KEY")
@@ -47,6 +49,34 @@ class HealingAgent:
             "ACR_HEAL_MODEL",
             "gemini-3.8-flash",
         )
+
+    def _resolve_project_scope(self, project_path=None):
+        """Return the selected language project, never an outside path."""
+        if not project_path:
+            return self.repo_root
+        candidate = Path(str(project_path)).resolve()
+        try:
+            candidate.relative_to(self.repo_root)
+        except ValueError:
+            print(
+                "[WARN] Analysis project is outside the clone; "
+                "healing scope reset to repository root."
+            )
+            return self.repo_root
+        if not candidate.is_dir():
+            print(
+                "[WARN] Analysis project is not a directory; "
+                "healing scope reset to repository root."
+            )
+            return self.repo_root
+        return candidate
+
+    def _within_project_scope(self, path):
+        try:
+            Path(path).resolve().relative_to(self.project_root)
+            return True
+        except ValueError:
+            return False
 
     # =========================================================
     # MAIN EXECUTION
@@ -374,6 +404,13 @@ SOURCE FILES:
 
 {source_text}
 
+SELECTED PROJECT SCOPE:
+
+{self.project_root.relative_to(self.repo_root).as_posix() if self.project_root != self.repo_root else "."}
+
+Only repair files inside the selected project scope above. Do not modify any
+other language directory in the repository.
+
 Return ONLY valid JSON.
 
 The response must contain a JSON array.
@@ -650,6 +687,9 @@ IMPORTANT RULES:
 
             except ValueError:
 
+                continue
+
+            if not self._within_project_scope(candidate_path):
                 continue
 
             # -------------------------------------------------
@@ -1370,6 +1410,13 @@ IMPORTANT RULES:
                     "file outside repository."
                 )
 
+                return False
+
+            if not self._within_project_scope(target_path):
+                print(
+                    "[ERROR] Attempt to modify a file outside the "
+                    "selected language project."
+                )
                 return False
 
             # -------------------------------------------------
