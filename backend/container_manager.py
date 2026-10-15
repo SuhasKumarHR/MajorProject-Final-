@@ -16,7 +16,8 @@ def run_pipeline_in_container(
     leader_name: str,
     retry_limit: int = 5,
     language_hint: str = "auto",
-    log_callback: Optional[Callable[[str, str, Optional[str]], None]] = None
+    log_callback: Optional[Callable[[str, str, Optional[str]], None]] = None,
+    repo_branch: str = "main",
 ) -> dict:
     """
     Spin up a worker container, run the pipeline, collect the result, and
@@ -29,6 +30,7 @@ def run_pipeline_in_container(
         retry_limit: Maximum number of healing iterations (default: 5)
         language_hint: Explicit language ID from the dashboard, or ``auto``
         log_callback: Optional synchronous function to emit logs via WebSocket
+        repo_branch: Branch or tag to clone before analysis.
         
     Returns:
         dict with pipeline result (status, fixes, pr_link, etc.)
@@ -57,9 +59,14 @@ def run_pipeline_in_container(
         "REPO_URL": repo_url,
         "TEAM_NAME": team_name,
         "LEADER_NAME": leader_name,
+        "REPO_BRANCH": str(repo_branch or "main").strip() or "main",
         "LANGUAGE_HINT": str(language_hint or "auto").strip().lower(),
         "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
         "ACR_HEAL_MODEL": os.getenv("ACR_HEAL_MODEL", "gemini-3.8-flash"),
+        "ACR_HEAL_FALLBACK_MODEL": os.getenv(
+            "ACR_HEAL_FALLBACK_MODEL",
+            os.getenv("ACR_AURA_FALLBACK_MODEL", "gemini-3.7-flash"),
+        ),
         "ACR_CHAT_MODEL": os.getenv("ACR_CHAT_MODEL", "gemini-3.8-flash"),
         "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
         "MAX_RETRIES": str(retry_limit),

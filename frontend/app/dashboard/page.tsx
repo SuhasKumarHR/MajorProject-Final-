@@ -960,24 +960,95 @@ export default function DashboardPage() {
     if (!question || !assistantReady) return;
     const lower = question.toLowerCase();
     const failureHistory = records<Record<string, unknown>>(runState.failure_history);
-    const errors = liveLogs.filter((log) => log.type === "error").map((log) => log.text);
-    if (!errors.length) {
-      errors.push(
-        ...failureHistory.map((item) => String(item.error ?? item.stderr ?? item.message ?? ""))
-          .filter(Boolean),
-      );
-    }
-    if (!errors.length && runState.error) errors.push(String(runState.error));
-    const changed = filesChanged.length ? filesChanged.join(", ") : "No verified changed files yet.";
-    const diagnosis = String(runState.gemini_diagnosis ?? runState.diagnosis ?? "No Gemini diagnosis has been reported yet.");
+    const analysis = record(runState.last_analysis);
+    const environment = record(runState.environment);
+    const selection = record(runState.language_selection);
+    const verification = record(runState.verification);
+    const rollback = record(runState.rollback);
+    const git = record(runState.git);
     const category = record(runState.knn);
-    let answer = `Current stage: ${String(runState.current_stage ?? "waiting")}. Ask about failures, KNN, Gemini, files, retries, rollback, or the PR.`;
-    if (/fail|error|problem|why/.test(lower)) answer = errors.length ? `Actual run errors:\n${errors.join("\n")}` : "No compiler, test, or pipeline failure has been reported by this run yet.";
-    else if (/knn|classif|confidence/.test(lower)) answer = Object.keys(category).length ? `KNN result: ${JSON.stringify(category)}` : "KNN has not reported a result yet.";
-    else if (/gemini|diagnos|repair|heal/.test(lower)) answer = diagnosis;
-    else if (/file|change|patch/.test(lower)) answer = `Verified changed files: ${changed}`;
-    else if (/retry|attempt|rollback/.test(lower)) answer = `Healing attempt: ${String(runState.healing_attempt ?? "not started")}. Rollback: ${String(record(runState.rollback).status ?? "not reported")}.`;
-    else if (/github|pr|pull request/.test(lower)) answer = String(runState.pr_link ?? sidebarGithubUrl ?? "No verified pull request has been created yet.");
+    const fixes = records<Record<string, unknown>>(runState.fixes);
+    const rollbackEvents = records<Record<string, unknown>>(runState.rollback_events);
+
+    const errors = [
+      ...liveLogs
+        .filter((log) => log.type === "error" || /error|fail|exception|rollback/i.test(log.text))
+        .map((log) => log.text),
+      ...failureHistory.map((item) => String(item.error ?? item.stderr ?? item.message ?? "")),
+      String(analysis.error ?? ""),
+      String(analysis.stderr ?? ""),
+      String(runState.error ?? ""),
+    ].filter((value, index, values) => value.trim() && values.indexOf(value) === index);
+
+    const trimText = (value: string, limit = 1800) =>
+      value.length > limit ? `${value.slice(0, limit)}…` : value;
+    const currentStatus = String(runState.final_status ?? runState.status ?? "WAITING");
+    const currentStage = String(
+      runState.current_stage ??
+      lastStageRef.current ??
+      (pipelineRunning ? "RUNNING" : currentStatus === "WAITING" ? "WAITING" : "COMPLETED"),
+    );
+    const changed = filesChanged.length
+      ? filesChanged.join(", ")
+      : "No verified changed files yet.";
+    const diagnosis = String(
+      runState.gemini_diagnosis ??
+      runState.diagnosis ??
+      "No Gemini diagnosis has been reported yet.",
+    );
+    const attempt = String(runState.healing_attempt ?? runState.iterations_used ?? 0);
+    const retryLimit = String(runState.retry_limit ?? runState.max_retries ?? 5);
+    const language = String(environment.language ?? selection.detected ?? "Unknown");
+    const framework = String(environment.framework ?? "Unknown");
+    const gitStatus = String(git.status ?? runState.git_status ?? "SKIPPED");
+    const prLink = String(runState.pr_link ?? "No verified pull request has been created yet.");
+    const failureText = errors.length
+      ? errors.slice(-4).map((error) => trimText(error)).join("\n\n")
+      : "No compiler, test, or pipeline failure has been reported by this run yet.";
+
+    let answer: string;
+    if (/^(help|what can|which questions)/.test(lower)) {
+      answer = "Ask about the repository, branch, language, current stage, build/test output, failures, KNN, Gemini diagnosis, attempts, changed files, rollback, verification, GitHub PR, logs, duration, or the final result.";
+    } else if (/current stage|what stage|where.*pipeline|running now/.test(lower)) {
+      answer = `Current stage: ${currentStage}. Run status: ${currentStatus}.`;
+    } else if (/repository|repo url|which repo|branch/.test(lower)) {
+      answer = `Repository: ${String(runState.repository ?? repoUrl ?? "Not provided")}\nBranch: ${String(runState.repository_branch ?? repoBranch ?? "main")}`;
+    } else if (/language|framework|package manager|build system|detected/.test(lower)) {
+      answer = `Selected language: ${String(selection.requested ?? languageHint)}\nDetected language: ${language}\nFramework: ${framework}\nPackage manager: ${String(environment.package_manager ?? "Unknown")}\nBuild system: ${String(environment.build_system ?? "Unknown")}`;
+    } else if (/fail|error|problem|why.*(build|test|pipeline)|root cause|compiler|test output/.test(lower)) {
+      answer = `Latest authoritative failure output:\n${failureText}\n\nCommand: ${String(analysis.command ?? "Not recorded")}`;
+    } else if (/knn|classif|confidence/.test(lower)) {
+      answer = Object.keys(category).length
+        ? `KNN category: ${String(category.category ?? "Unknown")}\nConfidence: ${String(category.confidence ?? "Not reported")}\nKNN is advisory; the compiler/test output remains authoritative.`
+        : "KNN has not reported a result yet because analysis has not produced a failure classification.";
+    } else if (/gemini|diagnos|repair|heal|ai fix/.test(lower)) {
+      answer = `Gemini diagnosis: ${diagnosis}`;
+    } else if (/file|change|patch|modified|source/.test(lower)) {
+      const fixSummary = fixes
+        .map((fix) => `${String(fix.file_path ?? "unknown")}: ${String(fix.description ?? fix.bug_type ?? "verified fix")}`)
+        .filter(Boolean)
+        .join("\n");
+      answer = `Verified changed files: ${changed}${fixSummary ? `\n\nFix details:\n${fixSummary}` : ""}`;
+    } else if (/retry|attempt|how many.*(left|remain)|healing/.test(lower)) {
+      answer = `Healing attempt: ${attempt} of ${retryLimit}\nFailures recorded: ${String(runState.total_failures ?? failureHistory.length)}\nCurrent status: ${currentStatus}`;
+    } else if (/rollback|rolled back|revert|restore/.test(lower)) {
+      const latestRollback = rollbackEvents.at(-1) ?? rollback;
+      answer = Object.keys(latestRollback).length
+        ? `Rollback status: ${String(latestRollback.status ?? "recorded")}\nRestored files: ${String(latestRollback.restored_files ?? "Not listed")}\nReason/context: ${String(latestRollback.verification_context ?? "Not recorded")}`
+        : "No rollback has been recorded for this run.";
+    } else if (/verif|passed|success|result|unresolved|final status/.test(lower)) {
+      answer = `Final status: ${currentStatus}\nVerification: ${String(verification.status ?? (verification.passed ? "SUCCESS" : "Not completed"))}\n${String(verification.message ?? "No verification message recorded.")}`;
+    } else if (/github|pr|pull request|commit|publish|branch.*created/.test(lower)) {
+      answer = `Git status: ${gitStatus}\nRecovery branch: ${String(runState.branch ?? "Not created")}\nPull request: ${prLink}${runState.git_error ? `\nGit error: ${String(runState.git_error)}` : ""}`;
+    } else if (/log|trace|console|output/.test(lower)) {
+      const recent = liveLogs.slice(-8).map((log) => `[${log.time}] ${log.text}`).join("\n");
+      answer = recent || "No live logs have been received yet.";
+    } else if (/time|duration|long|finish|complete/.test(lower)) {
+      const seconds = Number(runState.total_time_seconds ?? (runState.total_time_minutes ? Number(runState.total_time_minutes) * 60 : elapsedSeconds));
+      answer = `Elapsed pipeline time: ${formatElapsedTime(Number.isFinite(seconds) ? seconds : elapsedSeconds)}\nTime limit: ${String(runState.time_limit_seconds ?? 270)} seconds.`;
+    } else {
+      answer = `Run summary:\nStatus: ${currentStatus}\nStage: ${currentStage}\nLanguage: ${language}\nAttempt: ${attempt}/${retryLimit}\n${errors.length ? `Latest issue: ${trimText(errors.at(-1) ?? "")}` : "No failure has been recorded yet."}`;
+    }
     setPipelineMessages((current) => [
       ...current,
       { id: crypto.randomUUID(), role: "user", text: question },

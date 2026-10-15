@@ -71,32 +71,62 @@ but it is not the active project and should not be used to run this copy.
 
 ### Run the complete application locally (Windows PowerShell)
 
-Open three terminals. If PowerShell says script execution is disabled for `npm`, use `npm.cmd` as shown.
+Use the active project at `F:\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT`.
+Do not use the older `C:\Users\user\OneDrive\Desktop\CICD\ACR_AGENT` copy.
+
+Run this one-time setup after cloning or when dependencies are missing:
+
+```powershell
+cd F:\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT
+if (-not (Test-Path .\backend\.venv\Scripts\python.exe)) { py -3.12 -m venv .\backend\.venv }
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+```
+
+Open three terminals and leave all three running. If PowerShell says script
+execution is disabled for `npm`, use `npm.cmd` as shown.
 
 ```powershell
 # Terminal 1: start Docker Desktop, then build the isolated worker image
-cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
+cd F:\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
 docker version
 docker build -t rift-worker:latest -f Dockerfile.worker .
 ```
 
 ```powershell
 # Terminal 2: backend API and Socket.IO server
-cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
+cd F:\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\backend
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ```powershell
 # Terminal 3: frontend
-cd C:\Users\user\OneDrive\Desktop\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\frontend
+cd F:\FINAL_YEAR_PROJECT\ACR_AGENT\FINAL_YEAR_PROJECT\frontend
 npm.cmd install
 npm.cmd run dev
 ```
 
-Open `http://localhost:3000/dashboard`. The GitHub repository field is intentionally blank on every new dashboard session; enter the HTTPS repository you want to inspect before starting a run. Set `GEMINI_API_KEY` and `GITHUB_TOKEN` only in `backend/.env` before starting a repair run. Do not place either value in a `NEXT_PUBLIC_` frontend variable. Docker Desktop must be running before ACR_AGENT can build or test an untrusted repository.
+Check the backend before opening the UI:
 
-If `backend/.env` does not exist, copy `backend/.env.example` to `backend/.env` and fill in only your own keys. AURA and the healing agent use `GEMINI_API_KEY`. AURA uses the faster `gemini-3.5-flash-lite` model, bounds each request to 25 seconds, and tries `ACR_AURA_FALLBACK_MODEL` for temporary capacity errors.
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Then open `http://localhost:3000/auth`, create an account or sign in, and open
+the dashboard. The GitHub repository field is intentionally blank on every new
+dashboard session; enter the HTTPS repository and select one language before
+starting a run. Set `GEMINI_API_KEY` and `GITHUB_TOKEN` only in `backend/.env`.
+Docker Desktop must be running before ACR_AGENT can build or test a repository.
+
+For the multi-language demonstration repository, use this branch in the
+`GITHUB BRANCH` field so the worker runs the consolidated fixtures:
+`acr-agent/five-errors-all-languages`. Leaving the branch as `main` runs the
+repository's default branch instead.
+
+If `backend/.env` does not exist, copy `backend/.env.example` to `backend/.env`
+and fill in only your own keys. AURA and the healing agent use
+`GEMINI_API_KEY`; the configured text model is `gemini-3.5-flash-lite` for
+healing, chat, and AURA, with `gemini-3.6-flash` as the fallback model.
 
 ### Important operating limits
 
@@ -778,13 +808,14 @@ Add:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
-ACR_AURA_MODEL=gemini-3.5-flash-lite
-ACR_AURA_FALLBACK_MODEL=gemini-3.8-flash
+ACR_AURA_MODEL=gemini-3.8-flash
+ACR_AURA_FALLBACK_MODEL=gemini-3.7-flash
 GITHUB_TOKEN=your_github_token
 GOOGLE_CLIENT_ID=your_google_web_client_id
 GOOGLE_CLIENT_SECRET=your_google_web_client_secret
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
 ACR_HEAL_MODEL=gemini-3.8-flash
+ACR_HEAL_FALLBACK_MODEL=gemini-3.7-flash
 ACR_CHAT_MODEL=gemini-3.8-flash
 PIPELINE_TIME_LIMIT_SECONDS=270
 MAX_RETRIES=5
@@ -809,7 +840,7 @@ SQLite session used by email/password login.
 From the `backend` directory:
 
 ```bash
-docker build -f Dockerfile.worker -t acr-worker:latest .
+docker build -f Dockerfile.worker -t rift-worker:latest .
 ```
 
 ---
@@ -859,7 +890,7 @@ cd backend
 Start the FastAPI / Socket.IO server:
 
 ```bash
-uvicorn main:socket_app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 The backend will be available at:
@@ -1149,13 +1180,13 @@ docker images
 Make sure the worker image exists:
 
 ```text
-acr-worker:latest
+rift-worker:latest
 ```
 
 If necessary, rebuild:
 
 ```bash
-docker build -f Dockerfile.worker -t acr-worker:latest .
+docker build -f Dockerfile.worker -t rift-worker:latest .
 ```
 
 ---
@@ -1264,7 +1295,7 @@ For backend development:
 
 ```bash
 cd backend
-uvicorn main:socket_app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 For a production frontend build:

@@ -11,12 +11,13 @@ from language_detector import detect_project_details
 
 class RepoPrepAgent:
 
-    def __init__(self, repo_url, team_name, leader_name, language_hint="auto"):
+    def __init__(self, repo_url, team_name, leader_name, language_hint="auto", repo_branch="main"):
         self.repo_url = repo_url
 
         self.team_name = self._sanitize_name(team_name)
         self.leader_name = self._sanitize_name(leader_name)
         self.language_hint = self._normalize_language_hint(language_hint)
+        self.repo_branch = str(repo_branch or "main").strip() or "main"
 
         self.target_dir = os.path.join(os.getcwd(), "temp")
 
@@ -214,7 +215,8 @@ class RepoPrepAgent:
 
             Repo.clone_from(
                 self.repo_url,
-                self.target_dir
+                self.target_dir,
+                branch=self.repo_branch,
             )
 
             print(

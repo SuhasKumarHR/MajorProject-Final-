@@ -1,5 +1,6 @@
 import os
 import asyncio
+import functools
 import secrets
 from urllib.parse import urlencode
 from http.cookies import SimpleCookie
@@ -120,6 +121,7 @@ app.add_middleware(
 
 class RunRequest(BaseModel):
     repo_url: HttpUrl
+    repo_branch: str = "main"
     team_name: str
     leader_name: str
     language_hint: str = "auto"
@@ -283,6 +285,7 @@ def run_pipeline(request: RunRequest, http_request: Request):
             team_name,
             leader_name,
             language_hint=request.language_hint,
+            repo_branch=request.repo_branch,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -416,6 +419,7 @@ async def start_agent(sid, data):
         return
     
     repo_url = data.get('repo_url')
+    repo_branch = str(data.get('repo_branch', 'main') or 'main').strip() or 'main'
     team_name = data.get('team_name')
     leader_name = data.get('leader_name')
     retry_limit = data.get('retry_limit', 5)  # Default to 5 if not provided
@@ -450,6 +454,7 @@ async def start_agent(sid, data):
         run_agent_pipeline(
             sid,
             repo_url,
+            repo_branch,
             team_name,
             leader_name,
             retry_limit,
@@ -462,6 +467,7 @@ async def start_agent(sid, data):
 async def run_agent_pipeline(
     sid: str,
     repo_url: str,
+    repo_branch: str,
     team_name: str,
     leader_name: str,
     retry_limit: int,
@@ -491,16 +497,17 @@ async def run_agent_pipeline(
             )
         
         # Run the pipeline in a thread pool to avoid blocking
-        result = await loop.run_in_executor(
-            None, 
-            run_pipeline_in_container, 
-            repo_url, 
-            team_name, 
+        pipeline_call = functools.partial(
+            run_pipeline_in_container,
+            repo_url,
+            team_name,
             leader_name,
             retry_limit,
             language_hint,
-            sync_log_callback
+            sync_log_callback,
+            repo_branch,
         )
+        result = await loop.run_in_executor(None, pipeline_call)
         
         # Always send the complete result, including failed runs. The UI and
         # chatbot need the authoritative compiler/test output, failure history,

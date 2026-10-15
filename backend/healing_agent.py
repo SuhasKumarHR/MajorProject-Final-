@@ -26,8 +26,10 @@ class HealingAgent:
     8. Preserve backups of original files.
     """
 
-    def __init__(self, repo_path, analysis_result):
+    def __init__(self, repo_path, analysis_result, project_path=None):
         self.repo_path = str(repo_path)
+        self.repo_root = Path(repo_path).resolve()
+        self.project_root = self._resolve_project_scope(project_path)
         self.analysis_result = analysis_result
 
         self.api_key = os.getenv("GEMINI_API_KEY")
@@ -47,6 +49,34 @@ class HealingAgent:
             "ACR_HEAL_MODEL",
             "gemini-3.8-flash",
         )
+
+    def _resolve_project_scope(self, project_path=None):
+        """Return the selected language project, never an outside path."""
+        if not project_path:
+            return self.repo_root
+        candidate = Path(str(project_path)).resolve()
+        try:
+            candidate.relative_to(self.repo_root)
+        except ValueError:
+            print(
+                "[WARN] Analysis project is outside the clone; "
+                "healing scope reset to repository root."
+            )
+            return self.repo_root
+        if not candidate.is_dir():
+            print(
+                "[WARN] Analysis project is not a directory; "
+                "healing scope reset to repository root."
+            )
+            return self.repo_root
+        return candidate
+
+    def _within_project_scope(self, path):
+        try:
+            Path(path).resolve().relative_to(self.project_root)
+            return True
+        except ValueError:
+            return False
 
     # =========================================================
     # MAIN EXECUTION
@@ -374,6 +404,13 @@ SOURCE FILES:
 
 {source_text}
 
+SELECTED PROJECT SCOPE:
+
+{self.project_root.relative_to(self.repo_root).as_posix() if self.project_root != self.repo_root else "."}
+
+Only repair files inside the selected project scope above. Do not modify any
+other language directory in the repository.
+
 Return ONLY valid JSON.
 
 The response must contain a JSON array.
@@ -650,6 +687,9 @@ IMPORTANT RULES:
 
             except ValueError:
 
+                continue
+
+            if not self._within_project_scope(candidate_path):
                 continue
 
             # -------------------------------------------------
@@ -1052,85 +1092,98 @@ IMPORTANT RULES:
         prompt
     ):
 
+        primary_model = self.model_name.strip()
+        fallback_model = os.getenv(
+            "ACR_HEAL_FALLBACK_MODEL",
+            os.getenv("ACR_AURA_FALLBACK_MODEL", "gemini-3.7-flash"),
+        ).strip()
+        models = [primary_model]
+        if fallback_model and fallback_model not in models:
+            models.append(fallback_model)
+
+        # Keep healing bounded: retry the primary once, then try the fallback
+        # once. A provider capacity error must not make every language fail.
         max_attempts = 3
+        attempt = 0
+        for model_index, model_name in enumerate(models):
+            model_attempts = 2 if model_index == 0 else 1
+            for _ in range(model_attempts):
+                attempt += 1
+                if attempt > max_attempts:
+                    break
 
-        for attempt in range(
-            1,
-            max_attempts + 1
-        ):
-
-            try:
-
-                print(
-                    f"[INFO] Gemini API "
-                    f"attempt {attempt}/"
-                    f"{max_attempts}..."
-                )
-
-                response = (
-                    self.client.models.generate_content(
-                        model=self.model_name,
-                        contents=prompt,
-                        config={
-                            "temperature": 0.1,
-                            "response_mime_type":
-                                "application/json"
-                        }
-                    )
-                )
-
-                text = (
-                    response.text
-                    if response
-                    else ""
-                )
-
-                if not text:
-
-                    raise ValueError(
-                        "Gemini returned "
-                        "an empty response."
-                    )
-
-                parsed = (
-                    self._parse_gemini_json(
-                        text
-                    )
-                )
-
-                if parsed is not None:
+                try:
 
                     print(
-                        "[SUCCESS] Gemini response "
-                        "parsed successfully."
+                        f"[INFO] Gemini API "
+                        f"attempt {attempt}/"
+                        f"{max_attempts} using {model_name}..."
                     )
 
-                    return parsed
-
-                print(
-                    "[WARN] Gemini returned "
-                    "invalid JSON."
-                )
-
-            except Exception as e:
-
-                formatted_error = (
-                    self._format_gemini_error(
-                        e
+                    response = (
+                        self.client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config={
+                                "temperature": 0.1,
+                                "response_mime_type":
+                                    "application/json"
+                            }
+                        )
                     )
-                )
 
-                print(
-                    f"[WARN] Gemini attempt "
-                    f"{attempt} failed: "
-                    f"{formatted_error}"
-                )
+                    text = (
+                        response.text
+                        if response
+                        else ""
+                    )
 
-            if attempt < max_attempts:
+                    if not text:
 
-                time.sleep(
-                    2 * attempt
-                )
+                        raise ValueError(
+                            "Gemini returned "
+                            "an empty response."
+                        )
+
+                    parsed = (
+                        self._parse_gemini_json(
+                            text
+                        )
+                    )
+
+                    if parsed is not None:
+
+                        print(
+                            "[SUCCESS] Gemini response "
+                            "parsed successfully."
+                        )
+
+                        return parsed
+
+                    print(
+                        "[WARN] Gemini returned "
+                        "invalid JSON."
+                    )
+
+                except Exception as e:
+
+                    formatted_error = (
+                        self._format_gemini_error(
+                            e
+                        )
+                    )
+
+                    print(
+                        f"[WARN] Gemini attempt "
+                        f"{attempt} failed: "
+                        f"{formatted_error}"
+                    )
+
+                if attempt < max_attempts:
+
+                    time.sleep(
+                        2 * attempt
+                    )
 
         print(
             "[ERROR] Gemini healing failed "
@@ -1370,6 +1423,13 @@ IMPORTANT RULES:
                     "file outside repository."
                 )
 
+                return False
+
+            if not self._within_project_scope(target_path):
+                print(
+                    "[ERROR] Attempt to modify a file outside the "
+                    "selected language project."
+                )
                 return False
 
             # -------------------------------------------------
