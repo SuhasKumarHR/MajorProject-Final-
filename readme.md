@@ -125,8 +125,8 @@ repository's default branch instead.
 
 If `backend/.env` does not exist, copy `backend/.env.example` to `backend/.env`
 and fill in only your own keys. AURA and the healing agent use
-`GEMINI_API_KEY`; the configured text models are `gemini-3.8-flash` with
-`gemini-3.7-flash` as the healing and AURA fallback.
+`GEMINI_API_KEY`; the configured text model is `gemini-3.5-flash-lite` for
+healing, chat, and AURA, with `gemini-3.6-flash` as the fallback model.
 
 ### Important operating limits
 
