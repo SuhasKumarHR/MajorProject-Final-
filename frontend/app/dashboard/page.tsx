@@ -112,10 +112,20 @@ const backendUrl =
   "http://localhost:8000";
 
 const languageOptions = [
-  ["auto", "Auto detect"], ["python", "Python"], ["javascript", "JavaScript"],
-  ["typescript", "TypeScript"], ["java", "Java"], ["c", "C"], ["cpp", "C++"],
-  ["csharp", "C#"], ["go", "Go"], ["rust", "Rust"], ["php", "PHP"], ["kotlin", "Kotlin"],
+  ["auto", "Auto detect"], ["python", "python"], ["javascript", "javascript"],
+  ["typescript", "typescript"], ["java", "java"], ["c", "c"], ["cpp", "cpp (C++)"],
+  ["csharp", "csharp (C#)"], ["go", "go"], ["rust", "rust"], ["php", "php"], ["kotlin", "kotlin"],
 ] as const;
+
+const normalizeLanguageId = (value: unknown) => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    "c++": "cpp", cxx: "cpp", "c#": "csharp", cs: "csharp",
+    golang: "go", rs: "rust", kt: "kotlin", js: "javascript", ts: "typescript",
+    "auto detect": "auto",
+  };
+  return aliases[normalized] ?? normalized;
+};
 
 /* -------------------------------------------------------------------------- */
 /* DATA                                                                       */
@@ -1735,7 +1745,7 @@ export default function DashboardPage() {
 
                 {languageSelection.matches === false && (
                   <div className="mt-4 border border-amber-300/25 bg-amber-300/[0.06] px-4 py-3 text-xs leading-5 text-amber-100">
-                    Target mismatch: this repository was detected as <strong>{String(languageSelection.detected)}</strong>, but <strong>{String(languageSelection.requested)}</strong> was selected. Choose <strong>Auto detect</strong> or <strong>{String(languageSelection.detected)}</strong>, then run again.
+                    Target mismatch: this repository was detected as <strong>{normalizeLanguageId(languageSelection.detected)}</strong>, but <strong>{normalizeLanguageId(languageSelection.requested)}</strong> was selected. Choose <strong>Auto detect</strong> or the matching GitHub folder name, then run again.
                   </div>
                 )}
 
