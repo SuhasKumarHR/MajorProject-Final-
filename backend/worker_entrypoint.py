@@ -863,7 +863,7 @@ def main() -> None:
         "status": pipeline_status,
         "final_status": pipeline_status,
         "repository": repo_url,
-        "repository_branch": "main",
+        "repository_branch": repo_branch,
         "environment": environment,
         "language_selection": {
             "requested": environment.get("requested_language", "auto"),

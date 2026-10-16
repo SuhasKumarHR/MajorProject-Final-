@@ -88,8 +88,22 @@ class GitAgent:
             raise RuntimeError("GITHUB_TOKEN is not configured.")
         origin = repo.remotes.origin
         remote_url = origin.url
+        def push_and_validate(remote):
+            results = remote.push(refspec=f"{self.branch_name}:{self.branch_name}")
+            failures = []
+            for result in results:
+                flags = int(getattr(result, "flags", 0))
+                # GitPython PushInfo.ERROR/REJECTED/REMOTE_REJECTED flags.
+                if flags & 0x8 or flags & 0x10 or flags & 0x400:
+                    failures.append(str(getattr(result, "summary", result)))
+            if failures:
+                raise RuntimeError(
+                    f"GitHub branch push failed for '{self.branch_name}': "
+                    + " | ".join(failures)
+                )
+
         if not remote_url.startswith("https://github.com/"):
-            origin.push(refspec=f"{self.branch_name}:{self.branch_name}")
+            push_and_validate(origin)
             return
 
         authenticated_url = (
@@ -102,7 +116,7 @@ class GitAgent:
             repo.delete_remote(temporary_name)
         temporary_remote = repo.create_remote(temporary_name, authenticated_url)
         try:
-            temporary_remote.push(refspec=f"{self.branch_name}:{self.branch_name}")
+            push_and_validate(temporary_remote)
         finally:
             repo.delete_remote(temporary_remote)
 
