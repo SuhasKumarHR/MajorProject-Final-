@@ -115,11 +115,11 @@ class RepoPrepAgent:
         # Generate branch name
         # -----------------------------------------------------
 
-        branch_name = (
-            f"{self.team_name}_"
-            f"{self.leader_name}_"
-            f"AI_Fix"
-        )
+        # Keep each repair isolated to the selected language.  This prevents
+        # a C++ run from reusing a Python repair branch (and keeps the PR diff
+        # scoped to the selected project directory).
+        selected_language = str(environment.get("language_id", "unknown")).strip().lower()
+        branch_name = f"acr-agent/{selected_language}-ai-fix"
 
         print(
             f"[LOG] Generated branch name: {branch_name}"
